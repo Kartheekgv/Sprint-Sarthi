@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+build/
+.DS_Store
+rag/chroma_store/*
+!rag/chroma_store/.gitkeep
+data/*.tmp
+*.log
