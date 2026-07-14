@@ -1,0 +1,168 @@
+import {
+  Bell,
+  CheckCircle2,
+  ChevronDown,
+  Command,
+  Menu,
+  RefreshCw,
+  Search,
+  Settings,
+  UserRound,
+} from 'lucide-react';
+import { useCallback, useRef, useState } from 'react';
+import { routeLabels } from '../../data/navigation';
+import { useOutsideClick } from '../../hooks/useOutsideClick';
+import type { RouteId } from '../../types';
+import { Avatar } from '../common/Avatar';
+import { Button } from '../common/Button';
+
+interface TopbarProps {
+  route: RouteId;
+  selectedProject: string;
+  isSyncing: boolean;
+  onProjectChange: (project: string) => void;
+  onOpenMobile: () => void;
+  onOpenCommand: () => void;
+  onSync: () => void;
+  onNavigate: (route: RouteId) => void;
+}
+
+const notifications = [
+  { title: 'Approval requested', detail: 'Sprint 24 scope is waiting for your review.', time: '8 min' },
+  { title: 'Capacity risk detected', detail: 'Backend allocation is above 90%.', time: '42 min' },
+  { title: 'Jira sync completed', detail: '14 work items were updated.', time: '1 hr' },
+];
+
+export function Topbar({
+  route,
+  selectedProject,
+  isSyncing,
+  onProjectChange,
+  onOpenMobile,
+  onOpenCommand,
+  onSync,
+  onNavigate,
+}: TopbarProps) {
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const notificationRef = useRef<HTMLDivElement>(null);
+  const profileRef = useRef<HTMLDivElement>(null);
+
+  const closeNotifications = useCallback(() => setNotificationOpen(false), []);
+  const closeProfile = useCallback(() => setProfileOpen(false), []);
+  useOutsideClick(notificationRef, closeNotifications, notificationOpen);
+  useOutsideClick(profileRef, closeProfile, profileOpen);
+
+  return (
+    <header className="topbar">
+      <div className="topbar__title-group">
+        <button className="topbar__mobile-menu icon-button" onClick={onOpenMobile} aria-label="Open navigation">
+          <Menu size={21} />
+        </button>
+        <div className="topbar__breadcrumb">
+          <span>Cloud Operations</span>
+          <small>/</small>
+          <strong>{routeLabels[route]}</strong>
+        </div>
+      </div>
+
+      <div className="topbar__actions">
+        <button className="global-search" onClick={onOpenCommand}>
+          <Search size={17} />
+          <span>Search workspace</span>
+          <kbd>
+            <Command size={12} /> K
+          </kbd>
+        </button>
+
+        <Button
+          className="topbar__sync"
+          icon={<RefreshCw className={isSyncing ? 'is-spinning' : ''} size={17} />}
+          onClick={onSync}
+          disabled={isSyncing}
+        >
+          {isSyncing ? 'Syncing...' : 'Sync Jira'}
+        </Button>
+
+        <label className="project-select" aria-label="Select project">
+          <span className="project-select__dot" />
+          <select value={selectedProject} onChange={(event) => onProjectChange(event.target.value)}>
+            <option>Cloud Operations</option>
+            <option>Fleet Experience</option>
+            <option>Customer Portal</option>
+          </select>
+          <ChevronDown size={15} />
+        </label>
+
+        <div className="topbar-popover" ref={notificationRef}>
+          <button
+            className="notification-button icon-button"
+            onClick={() => setNotificationOpen((current) => !current)}
+            aria-label="Open notifications"
+            aria-expanded={notificationOpen}
+          >
+            <Bell size={19} />
+            <span className="notification-button__count">3</span>
+          </button>
+          {notificationOpen ? (
+            <div className="popover popover--notifications">
+              <div className="popover__header">
+                <div>
+                  <strong>Notifications</strong>
+                  <small>Three unread updates</small>
+                </div>
+                <button>Mark all read</button>
+              </div>
+              <div className="notification-list">
+                {notifications.map((notification) => (
+                  <button key={notification.title} className="notification-item">
+                    <span className="notification-item__icon">
+                      <CheckCircle2 size={17} />
+                    </span>
+                    <span>
+                      <strong>{notification.title}</strong>
+                      <small>{notification.detail}</small>
+                    </span>
+                    <time>{notification.time}</time>
+                  </button>
+                ))}
+              </div>
+              <button className="popover__footer" onClick={() => onNavigate('activity')}>
+                View activity log
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="topbar-popover" ref={profileRef}>
+          <button
+            className="topbar-profile"
+            onClick={() => setProfileOpen((current) => !current)}
+            aria-expanded={profileOpen}
+          >
+            <Avatar name="Kartheek Reddy" size="sm" online />
+            <span>Kartheek</span>
+            <ChevronDown size={15} />
+          </button>
+          {profileOpen ? (
+            <div className="popover popover--profile">
+              <div className="profile-summary">
+                <Avatar name="Kartheek Reddy" size="md" online />
+                <div>
+                  <strong>Kartheek Reddy</strong>
+                  <small>kartheek.reddy@example.com</small>
+                </div>
+              </div>
+              <button>
+                <UserRound size={17} /> Profile
+              </button>
+              <button onClick={() => onNavigate('settings')}>
+                <Settings size={17} /> Workspace settings
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </header>
+  );
+}

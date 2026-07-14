@@ -1,0 +1,112 @@
+:root {
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --sidebar-expanded: 288px;
+  --sidebar-collapsed: 88px;
+  --topbar-height: 72px;
+
+  --radius-xs: 8px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+
+  --primary-50: #f5f3ff;
+  --primary-100: #ede9fe;
+  --primary-300: #c4b5fd;
+  --primary-400: #a78bfa;
+  --primary-500: #8b5cf6;
+  --primary-600: #7c3aed;
+  --primary-700: #6d28d9;
+
+  --blue: #3b82f6;
+  --green: #22c55e;
+  --orange: #f59e0b;
+  --pink: #d946ef;
+  --red: #ef4444;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --shadow-md: 0 12px 35px rgba(0, 0, 0, 0.22);
+  --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.35);
+  --transition: 180ms ease;
+}
+
+:root,
+:root[data-theme='dark'] {
+  --page: #07101e;
+  --page-accent: #0a1324;
+  --sidebar: #0c1729;
+  --sidebar-strong: #0a1424;
+  --topbar: rgba(7, 16, 30, 0.88);
+  --panel: #101b2d;
+  --panel-soft: #0d1727;
+  --panel-elevated: #142139;
+  --field: #0b1525;
+  --field-hover: #101c2f;
+  --overlay: rgba(2, 8, 20, 0.78);
+
+  --text: #f5f7fb;
+  --text-strong: #ffffff;
+  --text-muted: #9aa9bd;
+  --text-subtle: #6f8097;
+  --text-inverse: #101827;
+
+  --border: rgba(156, 173, 198, 0.16);
+  --border-strong: rgba(156, 173, 198, 0.26);
+  --divider: rgba(156, 173, 198, 0.11);
+  --hover: rgba(255, 255, 255, 0.055);
+  --selected: rgba(139, 92, 246, 0.15);
+  --selected-strong: rgba(139, 92, 246, 0.24);
+  --focus: rgba(167, 139, 250, 0.34);
+
+  --success-bg: rgba(34, 197, 94, 0.13);
+  --warning-bg: rgba(245, 158, 11, 0.14);
+  --danger-bg: rgba(239, 68, 68, 0.13);
+  --info-bg: rgba(59, 130, 246, 0.13);
+}
+
+:root[data-theme='light'] {
+  --page: #f3f6fb;
+  --page-accent: #eaf0f8;
+  --sidebar: #ffffff;
+  --sidebar-strong: #f8faff;
+  --topbar: rgba(255, 255, 255, 0.88);
+  --panel: #ffffff;
+  --panel-soft: #f8faff;
+  --panel-elevated: #ffffff;
+  --field: #f7f9fc;
+  --field-hover: #f1f5f9;
+  --overlay: rgba(12, 21, 37, 0.46);
+
+  --text: #243145;
+  --text-strong: #101827;
+  --text-muted: #607086;
+  --text-subtle: #8a98aa;
+  --text-inverse: #ffffff;
+
+  --border: rgba(53, 72, 101, 0.14);
+  --border-strong: rgba(53, 72, 101, 0.23);
+  --divider: rgba(53, 72, 101, 0.1);
+  --hover: rgba(36, 49, 69, 0.055);
+  --selected: rgba(124, 58, 237, 0.09);
+  --selected-strong: rgba(124, 58, 237, 0.16);
+  --focus: rgba(124, 58, 237, 0.22);
+
+  --shadow-sm: 0 1px 2px rgba(43, 62, 89, 0.08);
+  --shadow-md: 0 12px 35px rgba(43, 62, 89, 0.11);
+  --shadow-lg: 0 24px 80px rgba(43, 62, 89, 0.18);
+
+  --success-bg: rgba(34, 197, 94, 0.1);
+  --warning-bg: rgba(245, 158, 11, 0.11);
+  --danger-bg: rgba(239, 68, 68, 0.1);
+  --info-bg: rgba(59, 130, 246, 0.1);
+}
