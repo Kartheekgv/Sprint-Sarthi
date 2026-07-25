@@ -2,6 +2,7 @@ import { ArrowRight } from 'lucide-react';
 import { recentActivity } from '../../data/dashboard';
 import type { RouteId } from '../../types';
 import { Panel } from '../common/Panel';
+import { TeamIllustration } from '../common/DashboardIllustrations';
 
 interface ActivityFeedProps {
   onNavigate: (route: RouteId) => void;
@@ -19,6 +20,7 @@ export function ActivityFeed({ onNavigate }: ActivityFeedProps) {
         </button>
       }
     >
+      <TeamIllustration className="activity-feed__illustration" />
       <div className="activity-list">
         {recentActivity.map((activity) => {
           const Icon = activity.icon;

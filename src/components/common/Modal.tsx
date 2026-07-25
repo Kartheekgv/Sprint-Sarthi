@@ -1,4 +1,4 @@
-import { X } from 'lucide-react';
+import { IconClose } from '../icons';
 import { useEffect, type ReactNode } from 'react';
 
 interface ModalProps {
@@ -44,7 +44,7 @@ export function Modal({ open, title, description, onClose, children, size = 'md'
             {description ? <p>{description}</p> : null}
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Close dialog">
-            <X size={19} />
+            <IconClose size={19} />
           </button>
         </header>
         <div className="modal__body">{children}</div>

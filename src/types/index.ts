@@ -1,4 +1,6 @@
-import type { LucideIcon } from 'lucide-react';
+import type { ComponentType, SVGProps } from 'react';
+
+export type IconComponent = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
 
 export type ThemeMode = 'dark' | 'light';
 
@@ -21,7 +23,7 @@ export interface NavigationItem {
   id: RouteId;
   label: string;
   description: string;
-  icon: LucideIcon;
+  icon: IconComponent;
   badge?: number | string;
 }
 

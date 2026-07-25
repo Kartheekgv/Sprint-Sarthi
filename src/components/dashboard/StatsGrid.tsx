@@ -1,9 +1,11 @@
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react';
 import { dashboardStats } from '../../data/dashboard';
+import { AnalyticsIllustration } from '../common/DashboardIllustrations';
 
 export function StatsGrid() {
   return (
     <section className="stats-grid" aria-label="Sprint metrics">
+      <AnalyticsIllustration className="stats-grid__illustration" />
       {dashboardStats.map((stat) => {
         const Icon = stat.icon;
         return (

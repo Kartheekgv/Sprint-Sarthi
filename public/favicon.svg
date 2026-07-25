@@ -1,12 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#8b5cf6"/>
-      <stop offset="1" stop-color="#4f46e5"/>
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" rx="18" fill="url(#g)"/>
-  <path d="M20 25h24v19H20z" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round"/>
-  <path d="M26 25v-5m12 5v-5M26 35h.01M38 35h.01M27 43c2.2 2 7.8 2 10 0" fill="none" stroke="white" stroke-width="4" stroke-linecap="round"/>
-  <path d="M14 31h6m24 0h6" stroke="white" stroke-width="4" stroke-linecap="round"/>
+  <!-- Bold rounded square background -->
+  <rect width="64" height="64" rx="12" fill="#FF6600"/>
+  
+  <!-- Chariot silhouette - whitish -->
+  <!-- Front wheel -->
+  <circle cx="18" cy="46" r="8" stroke="#F5F5F5" stroke-width="3" fill="none"/>
+  <circle cx="18" cy="46" r="2.5" fill="#F5F5F5"/>
+  
+  <!-- Rear wheel -->
+  <circle cx="46" cy="46" r="8" stroke="#F5F5F5" stroke-width="3" fill="none"/>
+  <circle cx="46" cy="46" r="2.5" fill="#F5F5F5"/>
+  
+  <!-- Axle -->
+  <path d="M18 46H46" stroke="#F5F5F5" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- Chariot body -->
+  <path d="M12 32C12 32 7 32 7 37C7 42 12 44 12 44" stroke="#F5F5F5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M12 32H52C55 32 57 29 57 26V18C57 15 55 13 52 13H34" stroke="#F5F5F5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M34 13C28 13 18 15 12 22C6 29 12 32 12 32" stroke="#F5F5F5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Canopy -->
+  <path d="M28 13V8C28 6.5 29.5 5 31 5H48C49.5 5 51 6.5 51 8V13" stroke="#F5F5F5" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  
+  <!-- Flag -->
+  <path d="M54 5V12" stroke="#F5F5F5" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M54 5L61 8L54 11" stroke="#F5F5F5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Horse reins -->
+  <path d="M57 22L63 16" stroke="#F5F5F5" stroke-width="3" stroke-linecap="round"/>
 </svg>

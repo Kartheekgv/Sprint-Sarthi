@@ -1,5 +1,6 @@
 import { ArrowRight, CalendarDays, CircleCheckBig, Plus, Sparkles } from 'lucide-react';
 import { Button } from '../common/Button';
+import { RocketIllustration } from '../common/DashboardIllustrations';
 
 interface WelcomeHeroProps {
   project: string;
@@ -10,6 +11,7 @@ interface WelcomeHeroProps {
 export function WelcomeHero({ project, onOpenPlanning, onNewSprint }: WelcomeHeroProps) {
   return (
     <section className="welcome-hero">
+      <RocketIllustration className="welcome-hero__illustration" />
       <div className="welcome-hero__copy">
         <div className="welcome-hero__eyebrow">
           <span className="live-dot" />

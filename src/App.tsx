@@ -6,8 +6,10 @@ import { AppShell } from './components/layout/AppShell';
 import { Sidebar } from './components/layout/Sidebar';
 import { Topbar } from './components/layout/Topbar';
 import { DashboardPage } from './components/pages/DashboardPage';
+import { LoginPage } from './components/pages/LoginPage';
 import { ModulePage } from './components/pages/ModulePage';
 import { modulePages } from './data/modulePages';
+import { useAuth } from './hooks/useAuth';
 import { useHashRoute } from './hooks/useHashRoute';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useToast } from './hooks/useToast';
@@ -40,6 +42,7 @@ const initialFiles: QueuedFile[] = [
 
 export default function App() {
   const { route, navigate } = useHashRoute();
+  const { isAuthenticated, login, logout, user } = useAuth();
   const [theme, setTheme] = useLocalStorage<ThemeMode>('sprint-sarthi-theme', 'dark');
   const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorage('sprint-sarthi-sidebar-collapsed', false);
   const [selectedProject, setSelectedProject] = useLocalStorage('sprint-sarthi-project', 'Cloud Operations');
@@ -51,11 +54,13 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const { toasts, showToast, dismissToast } = useToast();
 
+  // Apply theme (must be before any conditional returns to follow React hooks rules)
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
   }, [theme]);
 
+  // Keyboard shortcuts
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
@@ -67,6 +72,11 @@ export default function App() {
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
   }, []);
+
+  // Show login page if not authenticated
+  if (!isAuthenticated) {
+    return <LoginPage onLogin={login} />;
+  }
 
   const handleJiraSync = async () => {
     if (isSyncing) return;
@@ -127,16 +137,28 @@ export default function App() {
     });
   };
 
+  const handleToggleSidebar = () => {
+    // On mobile, toggle the overlay; on desktop, toggle collapsed
+    if (window.innerWidth < 1024) {
+      setMobileOpen((current) => !current);
+    } else {
+      setSidebarCollapsed((current) => !current);
+    }
+  };
+
   const topbar = (
     <Topbar
       route={route}
       selectedProject={selectedProject}
       isSyncing={isSyncing}
+      theme={theme}
       onProjectChange={setSelectedProject}
-      onOpenMobile={() => setMobileOpen(true)}
+      onToggleSidebar={handleToggleSidebar}
       onOpenCommand={() => setCommandOpen(true)}
       onSync={() => void handleJiraSync()}
       onNavigate={navigate}
+      onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+      onLogout={logout}
     />
   );
 
@@ -145,12 +167,8 @@ export default function App() {
       route={route}
       collapsed={sidebarCollapsed}
       mobileOpen={mobileOpen}
-      theme={theme}
       onNavigate={navigate}
-      onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
       onCloseMobile={() => setMobileOpen(false)}
-      onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
-      onNewSprint={() => setNewSprintOpen(true)}
     />
   );
 

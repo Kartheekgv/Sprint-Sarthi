@@ -180,8 +180,7 @@
     display: none;
   }
 
-  .sidebar__mobile-close,
-  .topbar__mobile-menu {
+  .sidebar__mobile-close {
     display: inline-grid;
   }
 

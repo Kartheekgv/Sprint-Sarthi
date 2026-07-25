@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react';
+import { IconCheckCircle, IconInfo, IconWarning, IconError, IconClose } from '../icons';
 import type { ToastMessage } from '../../types';
 
 interface ToastStackProps {
@@ -7,10 +7,10 @@ interface ToastStackProps {
 }
 
 const icons = {
-  success: CheckCircle2,
-  info: Info,
-  warning: AlertTriangle,
-  danger: XCircle,
+  success: IconCheckCircle,
+  info: IconInfo,
+  warning: IconWarning,
+  danger: IconError,
 };
 
 export function ToastStack({ toasts, onDismiss }: ToastStackProps) {
@@ -28,7 +28,7 @@ export function ToastStack({ toasts, onDismiss }: ToastStackProps) {
               {toast.message ? <p>{toast.message}</p> : null}
             </div>
             <button onClick={() => onDismiss(toast.id)} aria-label="Dismiss notification">
-              <X size={16} />
+              <IconClose size={16} />
             </button>
           </article>
         );

@@ -13,9 +13,7 @@
   padding: clamp(20px, 2vw, 29px);
   border: 1px solid color-mix(in srgb, var(--primary-400) 22%, var(--border));
   border-radius: var(--radius-xl);
-  background:
-    radial-gradient(circle at 6% 10%, rgba(139, 92, 246, 0.2), transparent 28%),
-    linear-gradient(120deg, var(--panel), var(--panel-soft));
+  background: var(--panel);
   box-shadow: var(--shadow-md);
 }
 
@@ -82,7 +80,7 @@
 
 .module-metric--blue .module-metric__icon {
   background: var(--info-bg);
-  color: #60a5fa;
+  color: var(--primary-300);
 }
 
 .module-metric--green .module-metric__icon {
@@ -280,9 +278,7 @@
 .assistant-nudge {
   position: relative;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 100% 0%, rgba(139, 92, 246, 0.2), transparent 40%),
-    var(--panel);
+  background: var(--panel);
 }
 
 .assistant-nudge__icon {

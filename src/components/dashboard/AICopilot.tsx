@@ -12,6 +12,7 @@ import { useOutsideClick } from '../../hooks/useOutsideClick';
 import { askAssistant } from '../../services/mockApi';
 import type { ChatMessage } from '../../types';
 import { Panel } from '../common/Panel';
+import { AIBrainIllustration } from '../common/DashboardIllustrations';
 
 const models = [
   { id: 'gpt-4o', name: 'GPT-4o', provider: 'OpenAI', label: 'Recommended' },
@@ -74,6 +75,7 @@ export function AICopilot() {
         </span>
       }
     >
+      <AIBrainIllustration className="ai-copilot__illustration" />
       <div className="model-picker" ref={modelRef}>
         <button className="model-picker__button" onClick={() => setModelOpen((current) => !current)}>
           <span className="model-picker__icon">

@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { recentInputs } from '../../data/dashboard';
 import { Panel } from '../common/Panel';
 import { StatusBadge } from '../common/StatusBadge';
+import { KanbanIllustration } from '../common/DashboardIllustrations';
 
 const tabs = ['Recent inputs', 'Meeting recordings', 'Notes and ideas', 'Descriptions'] as const;
 type TabName = (typeof tabs)[number];
@@ -19,6 +20,7 @@ export function RecentWork() {
 
   return (
     <Panel className="recent-work" padding="none">
+      <KanbanIllustration className="recent-work__illustration" />
       <div className="recent-work__topbar">
         <div className="tab-list" role="tablist" aria-label="Recent project content">
           {tabs.map((tab) => (

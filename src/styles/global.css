@@ -18,11 +18,9 @@ body {
   min-height: 100vh;
   margin: 0;
   overflow-x: hidden;
-  background:
-    radial-gradient(circle at 32% -10%, rgba(124, 58, 237, 0.13), transparent 31%),
-    radial-gradient(circle at 88% 10%, rgba(59, 130, 246, 0.08), transparent 28%),
-    var(--page);
+  background: var(--page);
   color: var(--text);
+  font: var(--text-body);
 }
 
 body.modal-open {
@@ -80,6 +78,7 @@ h1,
 h2,
 h3,
 strong {
+  font-family: var(--font-serif);
   color: var(--text-strong);
 }
 
@@ -89,7 +88,7 @@ svg {
 }
 
 ::selection {
-  background: rgba(139, 92, 246, 0.32);
+  background: rgba(255, 102, 0, 0.25);
   color: var(--text-strong);
 }
 

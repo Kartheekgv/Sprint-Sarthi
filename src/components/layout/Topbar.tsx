@@ -3,16 +3,19 @@ import {
   CheckCircle2,
   ChevronDown,
   Command,
+  LogOut,
   Menu,
+  Moon,
   RefreshCw,
   Search,
   Settings,
+  Sun,
   UserRound,
 } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
 import { routeLabels } from '../../data/navigation';
 import { useOutsideClick } from '../../hooks/useOutsideClick';
-import type { RouteId } from '../../types';
+import type { RouteId, ThemeMode } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { Button } from '../common/Button';
 
@@ -20,11 +23,14 @@ interface TopbarProps {
   route: RouteId;
   selectedProject: string;
   isSyncing: boolean;
+  theme: ThemeMode;
   onProjectChange: (project: string) => void;
-  onOpenMobile: () => void;
+  onToggleSidebar: () => void;
   onOpenCommand: () => void;
   onSync: () => void;
   onNavigate: (route: RouteId) => void;
+  onToggleTheme: () => void;
+  onLogout: () => void;
 }
 
 const notifications = [
@@ -37,11 +43,14 @@ export function Topbar({
   route,
   selectedProject,
   isSyncing,
+  theme,
   onProjectChange,
-  onOpenMobile,
+  onToggleSidebar,
   onOpenCommand,
   onSync,
   onNavigate,
+  onToggleTheme,
+  onLogout,
 }: TopbarProps) {
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -56,7 +65,7 @@ export function Topbar({
   return (
     <header className="topbar">
       <div className="topbar__title-group">
-        <button className="topbar__mobile-menu icon-button" onClick={onOpenMobile} aria-label="Open navigation">
+        <button className="topbar__sidebar-toggle icon-button" onClick={onToggleSidebar} aria-label="Toggle sidebar">
           <Menu size={21} />
         </button>
         <div className="topbar__breadcrumb">
@@ -153,11 +162,20 @@ export function Topbar({
                   <small>kartheek.reddy@example.com</small>
                 </div>
               </div>
-              <button>
+              <button onClick={onToggleTheme} className="profile-menu-item">
+                {theme === 'dark' ? <Moon size={17} /> : <Sun size={17} />}
+                {theme === 'dark' ? 'Dark mode' : 'Light mode'}
+                <span className={`switch ${theme === 'dark' ? 'is-on' : ''}`} aria-hidden="true"><span /></span>
+              </button>
+              <button onClick={() => onNavigate('settings')} className="profile-menu-item">
+                <Settings size={17} /> Settings
+              </button>
+              <button className="profile-menu-item">
                 <UserRound size={17} /> Profile
               </button>
-              <button onClick={() => onNavigate('settings')}>
-                <Settings size={17} /> Workspace settings
+              <div className="profile-divider" />
+              <button onClick={onLogout} className="profile-menu-item profile-menu-item--danger">
+                <LogOut size={17} /> Sign out
               </button>
             </div>
           ) : null}
