@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+:root {
+  --canvas: #f4f3ef;
+  --ink: #17201d;
+  --muted: #66716c;
+  --line: #d9ddd9;
+  --line-strong: #adb7b1;
+  --soft: #f7f8f5;
+  --accent: #d95500;
+  --accent-light: #ff9c5a;
+  --success: #16794d;
+}
+
+@theme inline {
+  --color-background: var(--canvas);
+  --color-foreground: var(--ink);
+  --font-sans: var(--font-geist-sans);
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+.font-display { font-family: Georgia, "Times New Roman", serif; letter-spacing: 0; }
+button, input, textarea { border-radius: 4px; }
+button { cursor: pointer; }

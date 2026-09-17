@@ -1,0 +1,45 @@
+[project]
+name = "sprint-sarthi-backend"
+version = "0.1.0"
+description = "Sprint Sarthi API and workflow engine"
+requires-python = ">=3.11"
+dependencies = [
+  "aiosqlite>=0.20,<1",
+  "alembic>=1.14,<2",
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "langgraph>=0.2.60,<1",
+  "langgraph-checkpoint-sqlite>=2,<4",
+  "networkx>=3.4,<4",
+  "openai>=1.59,<2",
+  "openpyxl>=3.1,<4",
+  "pydantic-settings>=2.7,<3",
+  "pymupdf>=1.25,<2",
+  "python-docx>=1.1,<2",
+  "python-multipart>=0.0.20,<1",
+  "sqlalchemy[asyncio]>=2.0.36,<3",
+  "structlog>=24.4,<26",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+ai = [
+  "chromadb>=0.6,<1",
+  "pandas>=2.2,<3",
+  "sentence-transformers>=3.3,<4",
+]
+test = [
+  "httpx>=0.28,<1",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100

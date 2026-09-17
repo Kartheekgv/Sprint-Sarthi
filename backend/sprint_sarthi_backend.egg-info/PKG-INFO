@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: sprint-sarthi-backend
+Version: 0.1.0
+Summary: Sprint Sarthi API and workflow engine
+Requires-Python: >=3.11
+Requires-Dist: aiosqlite<1,>=0.20
+Requires-Dist: alembic<2,>=1.14
+Requires-Dist: fastapi<1,>=0.115
+Requires-Dist: httpx<1,>=0.28
+Requires-Dist: langgraph<1,>=0.2.60
+Requires-Dist: langgraph-checkpoint-sqlite<4,>=2
+Requires-Dist: networkx<4,>=3.4
+Requires-Dist: openai<2,>=1.59
+Requires-Dist: openpyxl<4,>=3.1
+Requires-Dist: pydantic-settings<3,>=2.7
+Requires-Dist: pymupdf<2,>=1.25
+Requires-Dist: python-docx<2,>=1.1
+Requires-Dist: python-multipart<1,>=0.0.20
+Requires-Dist: sqlalchemy[asyncio]<3,>=2.0.36
+Requires-Dist: structlog<26,>=24.4
+Requires-Dist: uvicorn[standard]<1,>=0.34
+Provides-Extra: ai
+Requires-Dist: chromadb<1,>=0.6; extra == "ai"
+Requires-Dist: pandas<3,>=2.2; extra == "ai"
+Requires-Dist: sentence-transformers<4,>=3.3; extra == "ai"
+Provides-Extra: test
+Requires-Dist: httpx<1,>=0.28; extra == "test"
+Requires-Dist: pytest<9,>=8.3; extra == "test"
+Requires-Dist: pytest-asyncio<1,>=0.25; extra == "test"
