@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useState, useSyncExternalStore } from "react";
 import {
   ArrowRight,
   Bot,
@@ -179,39 +179,159 @@ const stages = [
   "Approve",
   "Export",
 ];
+const stageHeadings = [
+  "Project intake",
+  "Clarification",
+  "Generate backlog",
+  "Review backlog",
+  "Sprint planning",
+  "Human approval",
+  "Workbook export",
+];
+const stageDescriptions = [
+  "Create the project and provide source evidence.",
+  "Resolve high-impact ambiguity before backlog generation.",
+  "Generate requirements and decompose them into executable work.",
+  "Enrich, estimate, and inspect the generated hierarchy.",
+  "Import verified capacity and prepare assignment and sprint recommendations.",
+  "Review board quality before recording a named human decision.",
+  "Download the approved six-sheet delivery workbook.",
+];
+const WORKFLOW_STORAGE_KEY = "sprint-sarthi.workflow.v1";
+
+type WorkflowSnapshot = {
+  selectedStage: number;
+  project: Project | null;
+  document: Document | null;
+  analysisJob: AnalysisJob | null;
+  session: AnalysisSession | null;
+  llmUsage: LLMUsage | null;
+  clarification: Clarification | null;
+  clarificationsComplete: boolean;
+  requirements: Requirement[];
+  decompositions: Decomposition[];
+  backlog: Backlog | null;
+  enriched: boolean;
+  estimated: boolean;
+  dependencies: BacklogDependency[] | null;
+  planningReady: boolean;
+  planningIssues: PlanningIssue[];
+  assignments: Assignment[];
+  sprintPlan: SprintDecision[];
+  duplicateCandidates: DuplicateCandidate[];
+  qualityResults: QualityResult[];
+  boardHealth: BoardHealth | null;
+  reviewer: string;
+  reviewNote: string;
+  publishedExport: PublishedExport | null;
+  selectedOption: string;
+  customAnswer: string;
+  name: string;
+  description: string;
+};
+
+function readWorkflowSnapshot(): Partial<WorkflowSnapshot> {
+  if (typeof window === "undefined") return {};
+  try {
+    return JSON.parse(
+      window.localStorage.getItem(WORKFLOW_STORAGE_KEY) ?? "{}",
+    ) as Partial<WorkflowSnapshot>;
+  } catch {
+    window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+    return {};
+  }
+}
+
+const subscribeToHydration = () => () => {};
 
 export default function Home() {
-  const [project, setProject] = useState<Project | null>(null);
-  const [document, setDocument] = useState<Document | null>(null);
-  const [analysisJob, setAnalysisJob] = useState<AnalysisJob | null>(null);
-  const [session, setSession] = useState<AnalysisSession | null>(null);
-  const [llmUsage, setLlmUsage] = useState<LLMUsage | null>(null);
+  const [initialSnapshot] = useState(readWorkflowSnapshot);
+  const hydrated = useSyncExternalStore(subscribeToHydration, () => true, () => false);
+  const [selectedStage, setSelectedStage] = useState(initialSnapshot.selectedStage ?? -1);
+  const [project, setProject] = useState<Project | null>(initialSnapshot.project ?? null);
+  const [document, setDocument] = useState<Document | null>(initialSnapshot.document ?? null);
+  const [analysisJob, setAnalysisJob] = useState<AnalysisJob | null>(initialSnapshot.analysisJob ?? null);
+  const [session, setSession] = useState<AnalysisSession | null>(initialSnapshot.session ?? null);
+  const [llmUsage, setLlmUsage] = useState<LLMUsage | null>(initialSnapshot.llmUsage ?? null);
   const [clarification, setClarification] = useState<Clarification | null>(
-    null,
+    initialSnapshot.clarification ?? null,
   );
-  const [clarificationsComplete, setClarificationsComplete] = useState(false);
-  const [requirements, setRequirements] = useState<Requirement[]>([]);
-  const [decompositions, setDecompositions] = useState<Decomposition[]>([]);
-  const [backlog, setBacklog] = useState<Backlog | null>(null);
-  const [enriched, setEnriched] = useState(false);
-  const [estimated, setEstimated] = useState(false);
-  const [dependencies, setDependencies] = useState<BacklogDependency[] | null>(null);
-  const [planningReady, setPlanningReady] = useState(false);
-  const [planningIssues, setPlanningIssues] = useState<PlanningIssue[]>([]);
-  const [assignments, setAssignments] = useState<Assignment[]>([]);
-  const [sprintPlan, setSprintPlan] = useState<SprintDecision[]>([]);
-  const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidate[]>([]);
-  const [qualityResults, setQualityResults] = useState<QualityResult[]>([]);
-  const [boardHealth, setBoardHealth] = useState<BoardHealth | null>(null);
-  const [reviewer, setReviewer] = useState("");
-  const [reviewNote, setReviewNote] = useState("");
-  const [publishedExport, setPublishedExport] = useState<PublishedExport | null>(null);
-  const [selectedOption, setSelectedOption] = useState("");
-  const [customAnswer, setCustomAnswer] = useState("");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
+  const [clarificationsComplete, setClarificationsComplete] = useState(initialSnapshot.clarificationsComplete ?? false);
+  const [requirements, setRequirements] = useState<Requirement[]>(initialSnapshot.requirements ?? []);
+  const [decompositions, setDecompositions] = useState<Decomposition[]>(initialSnapshot.decompositions ?? []);
+  const [backlog, setBacklog] = useState<Backlog | null>(initialSnapshot.backlog ?? null);
+  const [enriched, setEnriched] = useState(initialSnapshot.enriched ?? false);
+  const [estimated, setEstimated] = useState(initialSnapshot.estimated ?? false);
+  const [dependencies, setDependencies] = useState<BacklogDependency[] | null>(initialSnapshot.dependencies ?? null);
+  const [planningReady, setPlanningReady] = useState(initialSnapshot.planningReady ?? false);
+  const [planningIssues, setPlanningIssues] = useState<PlanningIssue[]>(initialSnapshot.planningIssues ?? []);
+  const [assignments, setAssignments] = useState<Assignment[]>(initialSnapshot.assignments ?? []);
+  const [sprintPlan, setSprintPlan] = useState<SprintDecision[]>(initialSnapshot.sprintPlan ?? []);
+  const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidate[]>(initialSnapshot.duplicateCandidates ?? []);
+  const [qualityResults, setQualityResults] = useState<QualityResult[]>(initialSnapshot.qualityResults ?? []);
+  const [boardHealth, setBoardHealth] = useState<BoardHealth | null>(initialSnapshot.boardHealth ?? null);
+  const [reviewer, setReviewer] = useState(initialSnapshot.reviewer ?? "");
+  const [reviewNote, setReviewNote] = useState(initialSnapshot.reviewNote ?? "");
+  const [publishedExport, setPublishedExport] = useState<PublishedExport | null>(initialSnapshot.publishedExport ?? null);
+  const [selectedOption, setSelectedOption] = useState(initialSnapshot.selectedOption ?? "");
+  const [customAnswer, setCustomAnswer] = useState(initialSnapshot.customAnswer ?? "");
+  const [name, setName] = useState(initialSnapshot.name ?? "");
+  const [description, setDescription] = useState(initialSnapshot.description ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  const unlockedStage = publishedExport
+    ? 6
+    : boardHealth
+      ? 5
+      : planningReady || assignments.length > 0 || sprintPlan.length > 0
+        ? 4
+        : backlog
+          ? 3
+          : clarificationsComplete || requirements.length > 0 || decompositions.length > 0
+            ? 2
+            : session
+              ? 1
+              : 0;
+  const visibleStage = selectedStage < 0
+    ? unlockedStage
+    : Math.min(selectedStage, unlockedStage);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const snapshot: WorkflowSnapshot = {
+      selectedStage: visibleStage,
+      project, document, analysisJob, session, llmUsage, clarification,
+      clarificationsComplete, requirements, decompositions, backlog, enriched,
+      estimated, dependencies, planningReady, planningIssues, assignments,
+      sprintPlan, duplicateCandidates, qualityResults, boardHealth, reviewer,
+      reviewNote, publishedExport, selectedOption, customAnswer, name, description,
+    };
+    try {
+      window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {
+      window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+    }
+  }, [
+    hydrated, visibleStage, project, document, analysisJob, session, llmUsage,
+    clarification, clarificationsComplete, requirements, decompositions, backlog,
+    enriched, estimated, dependencies, planningReady, planningIssues, assignments,
+    sprintPlan, duplicateCandidates, qualityResults, boardHealth, reviewer,
+    reviewNote, publishedExport, selectedOption, customAnswer, name, description,
+  ]);
+
+  function navigateToStage(index: number) {
+    if (index > unlockedStage) return;
+    setSelectedStage(index);
+    window.requestAnimationFrame(() => {
+      const target = window.document.getElementById(`workflow-content-${index}`)
+        ?? window.document.getElementById(`workflow-stage-${index}`);
+      target?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
 
   async function createProject(event: FormEvent) {
     event.preventDefault();
@@ -308,6 +428,7 @@ export default function Home() {
       }
       const created: AnalysisSession = await response.json();
       setSession(created);
+      setSelectedStage(1);
       await loadNextClarification(created.id);
       await loadLlmUsage(created.id);
     } catch (cause) {
@@ -377,6 +498,7 @@ export default function Home() {
       }
       const result: { requirements: Requirement[] } = await response.json();
       setRequirements(result.requirements);
+      setSelectedStage(2);
       await loadLlmUsage(session.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unexpected error");
@@ -421,6 +543,7 @@ export default function Home() {
         throw new Error(body.detail ?? "Backlog generation failed.");
       }
       setBacklog(await response.json());
+      setSelectedStage(3);
       await loadLlmUsage(session.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unexpected error");
@@ -514,7 +637,10 @@ export default function Home() {
       const result: { requires_clarification: boolean; issues: PlanningIssue[] } = await response.json();
       setPlanningIssues(result.issues);
       setPlanningReady(!result.requires_clarification);
-      if (!result.requires_clarification) await continuePlanningWorkflow(session.id);
+      if (!result.requires_clarification) {
+        setSelectedStage(4);
+        await continuePlanningWorkflow(session.id);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unexpected error");
     } finally {
@@ -556,6 +682,7 @@ export default function Home() {
     setQualityResults(qualityResult.results);
     const healthResult = await postAgent<{ health: BoardHealth }>(sessionId, "board-health");
     setBoardHealth(healthResult.health);
+    setSelectedStage(5);
     await loadLlmUsage(sessionId);
   }
 
@@ -583,6 +710,7 @@ export default function Home() {
           throw new Error(result.detail ?? "Workbook publication failed.");
         }
         setPublishedExport(await publishResponse.json());
+        setSelectedStage(6);
       } else {
         setBoardHealth(null);
       }
@@ -591,6 +719,10 @@ export default function Home() {
     } finally {
       setBusy(false);
     }
+  }
+
+  if (!hydrated) {
+    return <div className="min-h-screen bg-[var(--canvas)]" aria-label="Loading Sprint Sarthi" />;
   }
 
   return (
@@ -633,52 +765,80 @@ export default function Home() {
           aria-label="Workflow progress"
           className="mb-8 overflow-x-auto border-y border-[var(--line)] bg-white px-4"
         >
-          <ol className="flex min-w-max items-center py-3">
+          <ol className="grid min-w-[760px] grid-cols-7 items-start py-4">
             {stages.map((stage, index) => (
               <li
                 key={stage}
-                className={`flex items-center text-xs font-bold ${index === 0 ? "text-[var(--accent)]" : "text-[var(--muted)]"}`}
+                className={`relative flex flex-col items-center text-xs font-bold ${index <= unlockedStage ? "text-[var(--accent)]" : "text-[var(--muted)]"}`}
               >
-                <span
-                  className={`mr-2 grid size-6 place-items-center ${index === 0 ? "bg-[var(--accent)] text-white" : "bg-[var(--soft)]"}`}
-                >
-                  {index + 1}
-                </span>
-                {stage}
-                {index < stages.length - 1 && (
-                  <ArrowRight
-                    className="mx-4 text-[var(--line-strong)]"
-                    size={14}
+                {index > 0 && (
+                  <span
+                    aria-hidden="true"
+                    className={`absolute right-1/2 top-3 h-px w-full ${index <= unlockedStage ? "bg-[var(--accent)]" : "bg-[var(--line-strong)]"}`}
                   />
                 )}
+                <button
+                  type="button"
+                  onClick={() => navigateToStage(index)}
+                  disabled={index > unlockedStage}
+                  aria-current={index === visibleStage ? "step" : undefined}
+                  aria-label={`${stage}${index > unlockedStage ? " (locked)" : ""}`}
+                  className={`relative z-10 grid size-7 place-items-center border disabled:cursor-not-allowed ${index === visibleStage ? "border-[var(--ink)] bg-[var(--ink)] text-white" : index <= unlockedStage ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-[var(--line-strong)] bg-white"}`}
+                >
+                  {index < unlockedStage ? <CheckCircle2 size={14} /> : index + 1}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigateToStage(index)}
+                  disabled={index > unlockedStage}
+                  className={`mt-2 disabled:cursor-not-allowed ${index === visibleStage ? "underline decoration-2 underline-offset-4" : ""}`}
+                >
+                  {stage}
+                </button>
               </li>
             ))}
           </ol>
         </nav>
         <div className="grid gap-7 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <section className="border border-[var(--line)] bg-white p-5 sm:p-7">
+          <section id={`workflow-stage-${visibleStage}`} className="scroll-mt-6 border border-[var(--line)] bg-white p-5 sm:p-7">
             <div className="mb-6 flex items-start gap-3">
               <span className="grid size-10 shrink-0 place-items-center bg-[var(--soft)] text-[var(--accent)]">
                 <Plus size={20} />
               </span>
               <div>
                 <h2 className="font-display text-xl font-semibold">
-                  {session
-                    ? "Clarification"
-                    : project
-                      ? "Add source document"
-                      : "Create project"}
+                  {stageHeadings[visibleStage]}
                 </h2>
                 <p className="mt-1 text-sm text-[var(--muted)]">
-                  {session
-                    ? "Resolve high-impact ambiguity before backlog generation."
-                    : project
-                      ? "PDF, DOCX, or XLSX up to 25 MB"
-                      : "Name the outcome this backlog will support."}
+                  {stageDescriptions[visibleStage]}
                 </p>
               </div>
             </div>
-            {!project ? (
+            {visibleStage === 0 && session ? (
+              <div className="grid gap-4 border border-[var(--line)] bg-[var(--soft)] p-5">
+                <span className="text-xs font-bold uppercase text-[var(--accent)]">Intake complete</span>
+                <div>
+                  <h3 className="font-display text-xl font-semibold">{project?.name}</h3>
+                  <p className="mt-2 text-sm text-[var(--muted)]">
+                    {document?.original_name} · {document ? `${(document.size_bytes / 1024).toFixed(1)} KB` : "No document"}
+                  </p>
+                </div>
+                <button type="button" onClick={() => navigateToStage(1)} className="flex h-10 w-fit items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white">
+                  Continue to clarification <ArrowRight size={16} />
+                </button>
+              </div>
+            ) : visibleStage === 1 && clarificationsComplete && !clarification ? (
+              <div className="flex min-h-64 items-center justify-center border border-[var(--line)] bg-[var(--soft)] p-8 text-center">
+                <div>
+                  <CheckCircle2 className="mx-auto mb-4 text-[var(--success)]" size={34} />
+                  <strong className="block text-lg">Clarifications complete</strong>
+                  <p className="mt-2 text-sm text-[var(--muted)]">Answers are retained and available to requirement generation.</p>
+                  <button type="button" onClick={() => navigateToStage(2)} className="mx-auto mt-6 flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white">
+                    Open generated work <ArrowRight size={16} />
+                  </button>
+                </div>
+              </div>
+            ) : !project ? (
               <form onSubmit={createProject} className="grid gap-5">
                 <label className="grid gap-2 text-sm font-semibold">
                   Project name
@@ -848,7 +1008,7 @@ export default function Home() {
                 </p>
               </div>
             ) : requirements.length > 0 ? (
-              <div className="grid gap-4">
+              <div id="workflow-content-2" className="scroll-mt-6 grid gap-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <span className="text-xs font-bold uppercase text-[var(--accent)]">
@@ -944,7 +1104,7 @@ export default function Home() {
                   );
                 })}
                 {decompositions.length > 0 && (
-                  <section className="mt-4 border-t border-[var(--line)] pt-5">
+                  <section id="workflow-content-3" className="scroll-mt-6 mt-4 border-t border-[var(--line)] pt-5">
                     <div className="mb-4 flex items-center justify-between gap-4">
                       <div>
                         <span className="text-xs font-bold uppercase text-[var(--accent)]">Decomposition agent</span>
@@ -1075,7 +1235,7 @@ export default function Home() {
                             ))}
                           </div>
                         )}
-                        <div className="mt-4 border-t border-[var(--line)] pt-4">
+                        <div id="workflow-content-4" className="scroll-mt-6 mt-4 border-t border-[var(--line)] pt-4">
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
                               <strong className="text-sm">Planning data</strong>
@@ -1121,7 +1281,7 @@ export default function Home() {
                             </div>
                           )}
                           {sprintPlan.length > 0 && (
-                            <div className="mt-4 border-t border-[var(--line)] pt-4">
+                            <div id="workflow-content-5" className="scroll-mt-6 mt-4 border-t border-[var(--line)] pt-4">
                               <strong className="text-sm">Proposed sprint plan</strong>
                               <div className="mt-2 grid gap-2">
                                 {sprintPlan.map((decision) => (
@@ -1155,7 +1315,7 @@ export default function Home() {
                                 </div>
                               )}
                               {publishedExport && (
-                                <a href={`${API_URL.replace(/\/api\/v1$/, "")}${publishedExport.download_url}`} className="mt-4 inline-flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white">
+                                <a id="workflow-content-6" href={`${API_URL.replace(/\/api\/v1$/, "")}${publishedExport.download_url}`} className="scroll-mt-6 mt-4 inline-flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white">
                                   <FileText size={16} /> Download {publishedExport.filename}
                                 </a>
                               )}
