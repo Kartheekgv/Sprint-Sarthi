@@ -1,37 +1,48 @@
 # Sprint Sarthi
 
-Sprint Sarthi is a human-governed AI Scrum Master that converts architecture and requirement documents into a traceable, estimated, dependency-aware, Sprint-ready backlog.
+Sprint Sarthi is a human-governed AI Scrum Master that converts architecture documents into a traceable, estimated, dependency-aware, Sprint-ready backlog.
 
 ## Technology
 
 - Frontend: Next.js, React, TypeScript, Tailwind CSS
 - Backend: Python, FastAPI, SQLAlchemy, SQLite, Alembic
-- AI orchestration: LangGraph and GPT-4o through VW LLMAAS
-- Output: Browser preview and six-sheet Excel workbook
+- AI: LangGraph and GPT-4o through VW LLMAAS
 
-## Local Installation (Windows)
+## Run From A Downloaded ZIP (Windows)
 
-### Requirements
+### 1. Install Required Software
 
-- Python 3.11+
-- Node.js 20+
-- pnpm 10+
-- Valid LLMAAS credentials
+Install these tools before running the project:
 
-### 1. Backend
+- Python 3.11 or newer: https://www.python.org/downloads/
+- Node.js 20 or newer: https://nodejs.org/
 
-Open PowerShell in the project folder:
+During Python installation, select **Add Python to PATH**.
+
+### 2. Extract And Install
+
+1. Extract the ZIP file.
+2. Open the extracted `Sprint-Sarthi` folder.
+3. Double-click `install-local.bat`.
+
+Alternatively, run it from PowerShell:
 
 ```powershell
-cd backend
-py -3.11 -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e ".[test,ai]"
-Copy-Item .env.example .env
+.\install-local.bat
 ```
 
-This creates `backend/.env` from `backend/.env.example`. Open `backend/.env` and enter your LLMAAS credentials:
+This single installer:
+
+- Creates the Python virtual environment.
+- Installs all backend Python dependencies.
+- Installs pnpm when it is missing.
+- Installs all frontend JavaScript dependencies.
+- Creates `backend/.env` when it is missing.
+- Creates or updates the local SQLite database.
+
+### 3. Configure LLMAAS
+
+Open `backend/.env` and set these values:
 
 ```dotenv
 LLM_API_KEY=<your-api-key>
@@ -39,25 +50,25 @@ LLMAAS_CLIENT_ID=<your-client-id>
 LLMAAS_CLIENT_SECRET=<your-client-secret>
 ```
 
-Create the database and start the API:
+Do not share or commit this file.
+
+### 4. Start The Application
+
+Open two PowerShell windows in the extracted project folder.
+
+First window:
 
 ```powershell
-python -m alembic upgrade head
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+.\start-backend.bat
 ```
 
-### 2. Frontend
-
-Open a second PowerShell window in the project folder:
+Second window:
 
 ```powershell
-cd frontend
-pnpm install
-$env:NEXT_PUBLIC_API_URL="http://127.0.0.1:8000/api/v1"
-pnpm dev
+.\start-frontend.bat
 ```
 
-### 3. Open The Application
+### 5. Open In Browser
 
 - Application: http://localhost:3000
 - API health: http://127.0.0.1:8000/health
@@ -66,28 +77,38 @@ pnpm dev
 
 Demo login: `admin / password`
 
-## Later Runs
-
-Run these scripts in separate PowerShell windows:
-
-```powershell
-.\start-backend.bat
-.\start-frontend.bat
-```
-
-The `backend/.env` file must already contain valid credentials.
-
-## Tests
+## Manual Installation (Fallback)
 
 Backend:
 
 ```powershell
 cd backend
+py -3.11 -m venv .venv
 .venv\Scripts\Activate.ps1
-python -m pytest -q
+python -m pip install --upgrade pip
+python -m pip install -e ".[test,ai]"
+Copy-Item .env.example .env
+python -m alembic upgrade head
 ```
 
 Frontend:
+
+```powershell
+cd frontend
+npm install --global pnpm@10.34.5
+pnpm install --frozen-lockfile
+```
+
+## Verify Installation
+
+Backend tests:
+
+```powershell
+cd backend
+.venv\Scripts\python.exe -m pytest -q
+```
+
+Frontend checks:
 
 ```powershell
 cd frontend
@@ -98,18 +119,19 @@ pnpm build
 ## Basic Workflow
 
 1. Create a project and upload architecture documents.
-2. Process documents and answer required clarifications.
-3. Run the backlog, enrichment, estimation, and dependency agents.
-4. Upload verified Planning Data and review assignments and Sprint scope.
-5. Run duplicate detection, quality checks, and board health.
-6. Record named human approval.
+2. Process documents and answer clarifications.
+3. Generate, enrich, estimate, and analyze the backlog.
+4. Upload verified Planning Data.
+5. Review assignments, Sprint planning, duplicates, quality, and board health.
+6. Record human approval.
 7. Publish, preview, and download the Excel workbook.
 
 AI outputs remain proposals. Sprint Sarthi never automatically approves or publishes work.
 
 ## Common Issues
 
-- If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process Bypass`.
-- If the frontend cannot reach the API, verify the backend health URL and restart `pnpm dev` after setting `NEXT_PUBLIC_API_URL`.
-- If port 8000 or 3000 is busy, stop the existing process before restarting.
-- A Planning Data response can contain blocking validation issues. Assignment unlocks only after a valid workbook is imported.
+- **Python not found:** reinstall Python and enable **Add Python to PATH**.
+- **PowerShell activation blocked:** run `Set-ExecutionPolicy -Scope Process Bypass`.
+- **Port already in use:** stop the process using port 8000 or 3000.
+- **Frontend cannot reach the API:** confirm http://127.0.0.1:8000/health returns `ok`.
+- **LLMAAS authentication error:** verify the three credential values in `backend/.env`.
