@@ -304,6 +304,17 @@ type DuplicateCandidate = {
 type QualityResult = { id: string; item_id: string; item_type: string; score: number; passed: boolean; issues: string[] };
 type BoardHealth = { score: number; risk_level: string; metrics: Record<string, number>; issues: string[]; status: string };
 type PublishedExport = { filename: string; sha256: string; download_url: string };
+type WorkbookPreview = {
+  export_id: string;
+  filename: string;
+  sheet_names: string[];
+  sheet_name: string;
+  columns: string[];
+  rows: (string | number | boolean | null)[][];
+  offset: number;
+  limit: number;
+  total_rows: number;
+};
 type WorkflowResume = {
   project: Project;
   documents: Document[];
@@ -499,6 +510,9 @@ export default function Home() {
   const [reviewer, setReviewer] = useState(initialSnapshot.reviewer ?? "");
   const [reviewNote, setReviewNote] = useState(initialSnapshot.reviewNote ?? "");
   const [publishedExport, setPublishedExport] = useState<PublishedExport | null>(initialSnapshot.publishedExport ?? null);
+  const [workbookPreview, setWorkbookPreview] = useState<WorkbookPreview | null>(null);
+  const [previewSheet, setPreviewSheet] = useState("Epics");
+  const [previewOffset, setPreviewOffset] = useState(0);
   const [selectedOption, setSelectedOption] = useState(initialSnapshot.selectedOption ?? "");
   const [customAnswer, setCustomAnswer] = useState(initialSnapshot.customAnswer ?? "");
   const [name, setName] = useState(initialSnapshot.name ?? "");
@@ -565,6 +579,18 @@ export default function Home() {
       .then((result: { health: BoardHealth }) => setBoardHealth(result.health))
       .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not refresh board health."));
   }, [session, visibleAgent, publishedExport, boardHealthAvailable]);
+
+  useEffect(() => {
+    if (!session || visibleAgent !== 16 || !publishedExport) return;
+    const query = new URLSearchParams({ sheet: previewSheet, offset: String(previewOffset), limit: "100" });
+    fetch(`${API_URL}/sessions/${session.id}/published-workbook?${query}`)
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load the published workbook preview.");
+        return response.json();
+      })
+      .then((result: WorkbookPreview) => setWorkbookPreview(result))
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load the published workbook preview."));
+  }, [session, visibleAgent, publishedExport, previewSheet, previewOffset]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -811,6 +837,9 @@ export default function Home() {
       setBoardHealth(resumed.board_health);
       setApproved(resumed.approved);
       setPublishedExport(resumed.published_export);
+      setWorkbookPreview(null);
+      setPreviewSheet("Epics");
+      setPreviewOffset(0);
       setReviewer("");
       setReviewNote("");
       setSelectedOption("");
@@ -888,6 +917,9 @@ export default function Home() {
     setReviewer("");
     setReviewNote("");
     setPublishedExport(null);
+    setWorkbookPreview(null);
+    setPreviewSheet("Epics");
+    setPreviewOffset(0);
     setSelectedOption("");
     setCustomAnswer("");
     setName("");
@@ -1934,7 +1966,7 @@ export default function Home() {
             {visibleAgent < unlockedAgent ? <ChevronRight size={18} /> : <LockKeyhole size={16} />}
           </button>
         </nav>
-        <div className="grid min-w-0 gap-7 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className={`grid min-w-0 gap-7 ${visibleAgent === 16 ? "grid-cols-1" : "lg:grid-cols-[minmax(0,1fr)_360px]"}`}>
           <section key={visibleAgent} id={`workflow-stage-${visibleStage}`} className={`agent-view-transition agent-view-${transitionDirection} min-w-0 scroll-mt-6 border border-[var(--line)] bg-white p-5 sm:p-7`}>
             <div className="mb-6 flex items-start gap-3">
               <span className="grid size-10 shrink-0 place-items-center bg-[var(--soft)] text-[var(--accent)]">
@@ -2314,7 +2346,7 @@ export default function Home() {
                   </>
                 )}
                 {visibleAgent === 4 && decompositions.length > 0 && (
-                  <section className="scroll-mt-6">
+                  <section className="min-w-0 scroll-mt-6">
                     <div className="mb-4 flex items-center justify-between gap-4">
                       <div>
                         <span className="text-xs font-bold uppercase text-[var(--accent)]">Decomposition agent</span>
@@ -2344,7 +2376,7 @@ export default function Home() {
                   </section>
                 )}
                 {visibleAgent >= 5 && visibleAgent <= 16 && backlog && (
-                  <section className="scroll-mt-6">
+                  <section className="min-w-0 scroll-mt-6">
                     <div className="flex items-center justify-between gap-4">
                       <div>
                         <span className="text-xs font-bold uppercase text-[var(--accent)]">{agentStages[visibleAgent].label} agent</span>
@@ -2708,9 +2740,38 @@ export default function Home() {
                                 </div>
                               )}
                               {publishedExport && (
-                                <a id="workflow-content-6" href={`${API_URL.replace(/\/api\/v1$/, "")}${publishedExport.download_url}`} className="scroll-mt-6 mt-4 inline-flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white">
-                                  <FileText size={16} /> Download {publishedExport.filename}
-                                </a>
+                                <>
+                                  <a id="workflow-content-6" href={`${API_URL.replace(/\/api\/v1$/, "")}${publishedExport.download_url}`} className="scroll-mt-6 mt-4 inline-flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white">
+                                    <FileText size={16} /> Download {publishedExport.filename}
+                                  </a>
+                                  {visibleAgent === 16 && workbookPreview && (
+                                    <section className="mt-5 min-w-0 max-w-full border-t border-[var(--line)] pt-4">
+                                      <div className="flex flex-wrap items-end justify-between gap-3">
+                                        <div>
+                                          <span className="text-xs font-bold uppercase text-[var(--accent)]">Published workbook</span>
+                                          <h4 className="mt-1 font-display text-lg font-semibold">Excel backlog preview</h4>
+                                          <p className="mt-1 text-xs text-[var(--muted)]">Viewing {workbookPreview.total_rows} rows from {workbookPreview.sheet_name}.</p>
+                                        </div>
+                                        <span className="text-xs font-bold text-[var(--muted)]">Rows {workbookPreview.total_rows === 0 ? 0 : workbookPreview.offset + 1}-{Math.min(workbookPreview.offset + workbookPreview.rows.length, workbookPreview.total_rows)}</span>
+                                      </div>
+                                      <div className="mt-4 flex gap-1 overflow-x-auto border-b border-[var(--line)]" role="tablist" aria-label="Published workbook sheets">
+                                        {workbookPreview.sheet_names.map((sheetName) => (
+                                          <button key={sheetName} type="button" role="tab" aria-selected={sheetName === workbookPreview.sheet_name} onClick={() => { setPreviewSheet(sheetName); setPreviewOffset(0); }} className={`shrink-0 border-b-2 px-3 py-2 text-xs font-bold ${sheetName === workbookPreview.sheet_name ? "border-[var(--accent)] text-[var(--accent)]" : "border-transparent text-[var(--muted)] hover:text-[var(--ink)]"}`}>{sheetName}</button>
+                                        ))}
+                                      </div>
+                                      <div className="max-h-[560px] w-full max-w-full overflow-auto border border-t-0 border-[var(--line)]">
+                                        <table className="min-w-max border-collapse text-left text-xs">
+                                          <thead className="sticky top-0 z-10 bg-[var(--ink)] text-white"><tr>{workbookPreview.columns.map((column) => <th key={column} className="max-w-72 border-r border-white/15 px-3 py-2 align-top font-bold">{column}</th>)}</tr></thead>
+                                          <tbody>{workbookPreview.rows.map((row, rowIndex) => <tr key={workbookPreview.offset + rowIndex} className="border-b border-[var(--line)] even:bg-[var(--soft)]">{workbookPreview.columns.map((column, columnIndex) => <td key={`${column}-${columnIndex}`} className="max-w-72 whitespace-pre-wrap break-words border-r border-[var(--line)] px-3 py-2 align-top">{String(row[columnIndex] ?? "")}</td>)}</tr>)}</tbody>
+                                        </table>
+                                      </div>
+                                      <div className="mt-3 flex items-center justify-between gap-3">
+                                        <button type="button" onClick={() => setPreviewOffset((current) => Math.max(0, current - 100))} disabled={workbookPreview.offset === 0} className="h-9 border border-[var(--line-strong)] bg-white px-3 text-xs font-bold disabled:opacity-40">Previous 100</button>
+                                        <button type="button" onClick={() => setPreviewOffset((current) => current + 100)} disabled={workbookPreview.offset + workbookPreview.rows.length >= workbookPreview.total_rows} className="h-9 border border-[var(--line-strong)] bg-white px-3 text-xs font-bold disabled:opacity-40">Next 100</button>
+                                      </div>
+                                    </section>
+                                  )}
+                                </>
                               )}
                             </div>
                           )}
@@ -2774,7 +2835,7 @@ export default function Home() {
               </div>
             )}
           </section>
-          <aside className="min-w-0 self-start overflow-hidden border border-[var(--line-strong)] bg-white lg:sticky lg:top-6">
+          {visibleAgent !== 16 && <aside className="min-w-0 self-start overflow-hidden border border-[var(--line-strong)] bg-white lg:sticky lg:top-6">
             <div className="bg-[var(--ink)] p-5 text-white">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -2914,7 +2975,7 @@ export default function Home() {
               <div className="mb-2 flex items-center gap-2 font-bold text-[var(--ink)]"><ShieldCheck size={15} className="text-[var(--success)]" /> Human-governed delivery</div>
               Final exports remain locked until a named reviewer approves the project. API keys never reach this client.
             </div>
-          </aside>
+          </aside>}
         </div>
           </>
         )}

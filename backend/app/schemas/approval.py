@@ -26,3 +26,15 @@ class ExportRead(BaseModel):
     sha256: str
     status: str
     download_url: str
+
+
+class WorkbookPreviewRead(BaseModel):
+    export_id: str
+    filename: str
+    sheet_names: list[str]
+    sheet_name: str
+    columns: list[str]
+    rows: list[list[str | int | float | bool | None]]
+    offset: int
+    limit: int
+    total_rows: int

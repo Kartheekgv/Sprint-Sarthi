@@ -4,7 +4,7 @@ from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Path as ApiPath, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Path as ApiPath, Query, UploadFile, status
 from fastapi.responses import FileResponse, Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +39,7 @@ from app.schemas.quality import (
     BoardHealthGenerationResult, BoardHealthRead, QualityClarificationAnswerCreate,
     QualityClarificationRead, QualityGenerationResult, QualityRead,
 )
-from app.schemas.approval import ApprovalDecisionCreate, ApprovalDecisionRead, ExportRead
+from app.schemas.approval import ApprovalDecisionCreate, ApprovalDecisionRead, ExportRead, WorkbookPreviewRead
 from app.schemas.estimation import EstimationBriefCreate, EstimationBriefRead, EstimationBriefWorkspace
 from app.schemas.requirements import RequirementGenerationResult, RequirementRead
 from app.schemas.provenance import ProvenanceValue
@@ -65,6 +65,7 @@ from app.services.quality import (
     run_board_health, run_quality_checks,
 )
 from app.services.publication import publish_session_workbook
+from app.exporters.excel import preview_workbook
 from app.workflows.clarification import ClarificationState, resume_clarification_graph, start_clarification_graph
 from app.workflows.backlog import BacklogState, checkpoint_backlog_stage
 from app.workflows.enrichment import EnrichmentState, checkpoint_enrichment_stage
@@ -2147,6 +2148,30 @@ async def download_export(
     if not path.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Export file is unavailable")
     return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="sprint_sarthi_backlog.xlsx")
+
+
+@router.get("/sessions/{session_id}/published-workbook", response_model=WorkbookPreviewRead)
+async def preview_published_workbook(
+    session_id: str,
+    sheet: str | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=250),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    session = await db.get(AnalysisSession, session_id)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    export = await db.scalar(select(Export).where(Export.session_id == session.id, Export.status == "completed"))
+    if export is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Published workbook not found")
+    path = Path(export.filename)
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Published workbook file is unavailable")
+    try:
+        preview = preview_workbook(path, sheet, offset, limit)
+    except ValueError as error:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
+    return {"export_id": export.id, "filename": path.name, **preview}
 
 
 @router.get("/sessions/{session_id}/usage", response_model=SessionUsageRead)

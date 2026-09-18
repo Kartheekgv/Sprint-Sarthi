@@ -454,6 +454,13 @@ async def test_clarification_session_interrupts_and_resumes(client):
     assert published["filename"] == "sprint_sarthi_backlog.xlsx"
     download = await client.get(published["download_url"])
     assert download.status_code == 200
+    preview = await client.get(f"/api/v1/sessions/{session['id']}/published-workbook", params={"sheet": "User Stories", "limit": 10})
+    assert preview.status_code == 200
+    assert preview.json()["sheet_names"] == ["Epics", "User Stories", "Tasks", "Sprint Plan", "Dependencies", "Quality Report"]
+    assert preview.json()["sheet_name"] == "User Stories"
+    assert preview.json()["columns"][0] == "Story ID"
+    assert preview.json()["rows"]
+    assert len(preview.json()["rows"]) <= 10
     exported = load_workbook(io.BytesIO(download.content), read_only=True, data_only=True)
     assert exported.sheetnames == ["Epics", "User Stories", "Tasks", "Sprint Plan", "Dependencies", "Quality Report"]
     assert tuple(cell.value for cell in exported["Quality Report"][1]) == (
