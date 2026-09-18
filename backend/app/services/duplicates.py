@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import DuplicateCandidate, Epic, Task, UserStory
 from app.providers.base import LLMProvider
+from app.services.prompting import compact_json
 from app.schemas.duplicates import DuplicateBatch
 from app.schemas.provenance import ProvenanceValue
 
@@ -57,7 +58,7 @@ async def generate_duplicates(db: AsyncSession, session_id: str, provider: LLMPr
         "similarity": 0.9, "rationale": "string",
         "recommendation": "merge | keep_both | clarify", "confidence": 0.85,
     }]}
-    prompt = "Find duplicate candidates using this exact shape: " + json.dumps(shape) + "\n\nBACKLOG:\n" + json.dumps(context)
+    prompt = "Find duplicate candidates using this exact shape: " + compact_json(shape) + "\n\nBACKLOG:\n" + compact_json(context)
     known_ids = {item.stable_id for item in items}
     type_by_id = {item.stable_id: item.stable_id.split("-")[0] for item in items}
     validation_error = ""

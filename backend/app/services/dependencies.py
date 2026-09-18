@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import Dependency, Epic, Task, UserStory
 from app.providers.base import LLMProvider
+from app.services.prompting import compact_json
 from app.schemas.dependencies import DependencyBatch
 from app.schemas.provenance import ProvenanceValue, SourceReference
 
@@ -64,7 +65,7 @@ async def generate_dependencies(
         "dependency_type": "requires | precedes | blocks | relates_to",
         "risk": "critical | high | medium | low", "explanation": "string", "confidence": 0.9,
     }]}
-    prompt = "Analyze dependencies using this exact shape: " + json.dumps(shape) + "\n\nBACKLOG:\n" + json.dumps(context)
+    prompt = "Analyze dependencies using this exact shape: " + compact_json(shape) + "\n\nBACKLOG:\n" + compact_json(context)
     known_ids = {item.stable_id for item in items}
     validation_error = ""
     for _ in range(2):

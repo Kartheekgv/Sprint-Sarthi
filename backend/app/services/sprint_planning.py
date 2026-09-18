@@ -10,6 +10,7 @@ from app.models.entities import (
     AssignmentRecommendation, Dependency, Sprint, SprintPlanDecision, TeamMember, UserStory,
 )
 from app.providers.base import LLMProvider
+from app.services.prompting import compact_json
 from app.schemas.provenance import ProvenanceValue
 from app.schemas.sprint_planning import SprintPlanningBatch
 
@@ -100,7 +101,7 @@ async def generate_sprint_plan(db: AsyncSession, project_id: str, session_id: st
             "dependencies": [item for item in dependency_context if item["source"] in local_ids],
             "prior_decisions": [item.model_dump(mode="json") for item in merged_decisions],
         }
-        prompt = "Create a sprint recommendation using this exact shape: " + json.dumps(shape) + "\n\nDATA:\n" + json.dumps(context)
+        prompt = "Create a sprint recommendation using this exact shape: " + compact_json(shape) + "\n\nDATA:\n" + compact_json(context)
         prompts.append(prompt)
         validation_error = ""
         for _ in range(2):

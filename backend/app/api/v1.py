@@ -13,7 +13,7 @@ from app.core.config import Settings, get_settings
 from app.core.database import get_session
 from app.models.entities import (
     AgentExecution, AnalysisSession, Approval, AssignmentRecommendation, AuditEvent, BoardHealthResult, Clarification, ClarificationAnswer,
-    ClarificationOption, Decomposition, Dependency, Document, DocumentSection, DuplicateCandidate, Epic, Job, Project, Requirement,
+    ChatMessage, ClarificationOption, Decomposition, Dependency, Document, DocumentSection, DuplicateCandidate, Epic, Job, Project, Requirement,
     Export, QualityResult, Sprint, SprintPlanDecision, Task, UserStory,
 )
 from app.providers import get_llm_provider
@@ -21,6 +21,7 @@ from app.providers.base import LLMProvider
 from app.providers.llmaas import LLMAASError
 from app.schemas.clarifications import (
     AnalysisSessionRead, ClarificationAnswerCreate, ClarificationAnswerResult,
+    AgentFeedbackDraft, AgentMessageRead, AgentPromptCreate, AgentPromptResult, ClarificationHistoryRead,
     ClarificationOptionRead, ClarificationRead,
 )
 from app.schemas.backlog import BacklogGenerationResult, EpicRead, StoryRead, TaskRead
@@ -68,6 +69,70 @@ from app.workflows.requirements import RequirementState, checkpoint_requirement_
 router = APIRouter()
 
 
+
+def project_workflow_state(project: Project, documents: list[Document], session: AnalysisSession | None) -> dict[str, object]:
+    if session is None:
+        if not documents:
+            return {"workflow_state": "Project intake", "current_node": "Intake", "agent_index": 0}
+        if any(item.status != "processed" for item in documents):
+            return {"workflow_state": "Document analysis", "current_node": "Document Analysis", "agent_index": 1}
+        return {"workflow_state": "Ready for clarification", "current_node": "Clarification", "agent_index": 2}
+
+    agent_by_node = {
+        "Clarification": 2, "Requirement": 3, "Decomposition": 4, "Backlog": 5,
+        "Enrichment": 6, "Estimation": 7, "Dependency": 8, "Sprint": 11,
+        "Duplicate": 12, "Quality": 13, "BoardHealth": 14, "HumanApproval": 15,
+        "Publisher": 16, "Complete": 16,
+    }
+    state_by_status = {
+        "processing_requirements": "Analyzing requirements",
+        "processing_clarifications": "Preparing clarifications",
+        "awaiting_clarification": "Awaiting clarification",
+        "clarifications_complete": "Ready for requirements",
+        "requirements_complete": "Ready for decomposition",
+        "decomposition_complete": "Ready for backlog",
+        "backlog_complete": "Ready for enrichment",
+        "enrichment_complete": "Ready for estimation",
+        "estimation_complete": "Ready for dependency analysis",
+        "dependencies_complete": "Awaiting planning data",
+        "planning_data_ready": "Ready for assignment",
+        "assignment_complete": "Ready for sprint planning",
+        "sprint_planning_complete": "Ready for duplicate detection",
+        "duplicates_complete": "Ready for quality review",
+        "quality_complete": "Ready for board health",
+        "awaiting_approval": "Awaiting human approval",
+        "approved": "Approved, ready to publish",
+        "review_rejected": "Review rejected",
+        "changes_requested": "Changes requested",
+        "published": "Published",
+        "failed": "Needs attention",
+    }
+    agent_index = 9 if session.status == "dependencies_complete" else 10 if session.status == "planning_data_ready" else agent_by_node.get(session.current_node or "", 2)
+    return {
+        "workflow_state": state_by_status.get(session.status, session.status.replace("_", " ").title()),
+        "current_node": session.current_node,
+        "agent_index": agent_index,
+    }
+
+@router.get("/projects", response_model=list[ProjectRead])
+async def list_projects(db: AsyncSession = Depends(get_session)) -> list[dict[str, object]]:
+    projects = (await db.execute(
+        select(Project).order_by(Project.updated_at.desc(), Project.created_at.desc())
+    )).scalars().all()
+    result = []
+    for project in projects:
+        documents = (await db.execute(select(Document).where(Document.project_id == project.id))).scalars().all()
+        session = (await db.execute(
+            select(AnalysisSession).where(AnalysisSession.project_id == project.id).order_by(AnalysisSession.created_at.desc()).limit(1)
+        )).scalar_one_or_none()
+        result.append({
+            "id": project.id, "name": project.name, "description": project.description,
+            "status": project.status, "created_at": project.created_at,
+            **project_workflow_state(project, list(documents), session),
+        })
+    return result
+
+
 @router.post("/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
 async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_session)) -> Project:
     project = Project(name=payload.name.strip(), description=payload.description.strip())
@@ -77,6 +142,125 @@ async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_
     await db.commit()
     await db.refresh(project)
     return project
+
+
+@router.get("/projects/{project_id}/documents", response_model=list[DocumentRead])
+async def list_project_documents(
+    project_id: str,
+    db: AsyncSession = Depends(get_session),
+) -> list[Document]:
+    if await db.get(Project, project_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    return (await db.execute(
+        select(Document)
+        .where(Document.project_id == project_id)
+        .order_by(Document.created_at.desc())
+    )).scalars().all()
+
+
+@router.get("/projects/{project_id}/resume")
+async def resume_project_workflow(
+    project_id: str,
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    documents = list((await db.execute(
+        select(Document).where(Document.project_id == project_id).order_by(Document.created_at)
+    )).scalars().all())
+    session = (await db.execute(
+        select(AnalysisSession).where(AnalysisSession.project_id == project_id).order_by(AnalysisSession.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    state = project_workflow_state(project, documents, session)
+    base: dict[str, object] = {
+        "project": ProjectRead.model_validate(project).model_dump(),
+        "documents": [DocumentRead.model_validate(item).model_dump() for item in documents],
+        "session": AnalysisSessionRead.model_validate(session).model_dump() if session else None,
+        **state,
+        "clarification": None, "clarifications_complete": False,
+        "requirements": [], "decompositions": [], "backlog": None,
+        "enriched": False, "estimated": False, "dependencies": None,
+        "planning_ready": False, "assignments": [], "sprint_plan": [],
+        "duplicate_candidates": [], "duplicates_complete": False,
+        "quality_results": [], "board_health": None,
+        "approved": False, "published_export": None,
+    }
+    if session is None:
+        return base
+
+    status_order = [
+        "awaiting_clarification", "clarifications_complete", "requirements_complete",
+        "decomposition_complete", "backlog_complete", "enrichment_complete",
+        "estimation_complete", "dependencies_complete", "planning_data_ready",
+        "assignment_complete", "sprint_planning_complete", "duplicates_complete",
+        "quality_complete", "awaiting_approval", "approved", "published",
+    ]
+    progress_status = {
+        "review_rejected": "awaiting_approval",
+        "changes_requested": "awaiting_approval",
+    }.get(session.status, session.status)
+    rank = status_order.index(progress_status) if progress_status in status_order else -1
+    base["clarifications_complete"] = rank >= status_order.index("clarifications_complete")
+    if session.status == "awaiting_clarification":
+        pending = (await db.execute(
+            select(Clarification).where(Clarification.session_id == session.id, Clarification.status == "pending")
+            .order_by(Clarification.created_at, Clarification.id).limit(1)
+        )).scalar_one_or_none()
+        if pending:
+            options = (await db.execute(
+                select(ClarificationOption).where(ClarificationOption.clarification_id == pending.id).order_by(ClarificationOption.position)
+            )).scalars().all()
+            base["clarification"] = {
+                "id": pending.id, "session_id": session.id, "requirement_id": pending.requirement_stable_id,
+                "question": pending.question, "reason": pending.reason, "severity": pending.severity,
+                "missing_field": pending.missing_field, "recommended_answer_type": pending.recommended_answer_type,
+                "blocking": pending.blocking, "required": pending.required,
+                "recommended_option_id": pending.recommended_option_id or "",
+                "allow_custom_answer": pending.allow_custom_answer,
+                "source_references": json.loads(pending.source_references_json),
+                "options": [{"id": item.id, "label": item.label, "position": item.position} for item in options],
+            }
+    if rank >= status_order.index("requirements_complete"):
+        requirements = (await db.execute(select(Requirement).where(Requirement.session_id == session.id).order_by(Requirement.stable_id))).scalars().all()
+        base["requirements"] = [RequirementRead.model_validate(requirement_to_dict(item)).model_dump() for item in requirements]
+    if rank >= status_order.index("decomposition_complete"):
+        decompositions = (await db.execute(select(Decomposition).where(Decomposition.session_id == session.id).order_by(Decomposition.stable_id))).scalars().all()
+        base["decompositions"] = [DecompositionRead.model_validate(decomposition_to_dict(item)).model_dump() for item in decompositions]
+    if rank >= status_order.index("backlog_complete"):
+        epics = (await db.execute(select(Epic).where(Epic.session_id == session.id).order_by(Epic.stable_id))).scalars().all()
+        stories = (await db.execute(select(UserStory).where(UserStory.session_id == session.id).order_by(UserStory.stable_id))).scalars().all()
+        tasks = (await db.execute(select(Task).where(Task.session_id == session.id).order_by(Task.stable_id))).scalars().all()
+        epic_rows, story_rows, task_rows = backlog_to_dicts(epics, stories, tasks)
+        base["backlog"] = {"epics": epic_rows, "stories": story_rows, "tasks": task_rows}
+        base["enriched"] = rank >= status_order.index("enrichment_complete")
+        base["estimated"] = rank >= status_order.index("estimation_complete")
+    if rank >= status_order.index("dependencies_complete"):
+        dependencies = (await db.execute(select(Dependency).where(Dependency.session_id == session.id).order_by(Dependency.created_at))).scalars().all()
+        base["dependencies"] = [dependency_to_dict(item) for item in dependencies]
+    base["planning_ready"] = rank >= status_order.index("planning_data_ready")
+    if rank >= status_order.index("assignment_complete"):
+        assignments = (await db.execute(select(AssignmentRecommendation).where(AssignmentRecommendation.session_id == session.id).order_by(AssignmentRecommendation.item_stable_id))).scalars().all()
+        base["assignments"] = await assignments_to_dicts(db, assignments)
+    if rank >= status_order.index("sprint_planning_complete"):
+        decisions = (await db.execute(select(SprintPlanDecision).where(SprintPlanDecision.session_id == session.id).order_by(SprintPlanDecision.created_at))).scalars().all()
+        base["sprint_plan"] = await sprint_plan_to_dicts(db, decisions)
+    if rank >= status_order.index("duplicates_complete"):
+        duplicates = (await db.execute(select(DuplicateCandidate).where(DuplicateCandidate.session_id == session.id))).scalars().all()
+        base["duplicate_candidates"] = [duplicate_to_dict(item) for item in duplicates]
+        base["duplicates_complete"] = True
+    if rank >= status_order.index("quality_complete"):
+        quality = (await db.execute(select(QualityResult).where(QualityResult.session_id == session.id))).scalars().all()
+        base["quality_results"] = [quality_to_dict(item) for item in quality]
+    if rank >= status_order.index("awaiting_approval"):
+        health = await db.scalar(select(BoardHealthResult).where(BoardHealthResult.session_id == session.id))
+        base["board_health"] = board_health_to_dict(health) if health else None
+    base["approved"] = rank >= status_order.index("approved")
+    if session.status == "published":
+        export = await db.scalar(select(Export).where(Export.session_id == session.id, Export.status == "completed"))
+        if export:
+            base["published_export"] = {"filename": "sprint_sarthi_backlog.xlsx", "sha256": export.sha256, "download_url": f"/api/v1/exports/{export.id}/download"}
+    return base
 
 
 @router.post("/projects/{project_id}/documents", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
@@ -186,6 +370,9 @@ async def get_document_chunks(document_id: str, db: AsyncSession = Depends(get_s
         token_count=chunk.token_count,
         metadata=json.loads(chunk.metadata_json),
         extraction_confidence=chunk.extraction_confidence,
+        embedding_status="generated" if json.loads(chunk.metadata_json).get("embedding_dimensions") else "not_generated",
+        embedding_model=json.loads(chunk.metadata_json).get("embedding_model"),
+        embedding_dimensions=json.loads(chunk.metadata_json).get("embedding_dimensions"),
     ) for chunk in chunks]
 
 
@@ -327,6 +514,166 @@ async def next_clarification(session_id: str, db: AsyncSession = Depends(get_ses
         source_references=json.loads(clarification.source_references_json),
         options=[ClarificationOptionRead(id=option.id, label=option.label, position=option.position) for option in options],
     )
+
+
+@router.get("/sessions/{session_id}/clarifications", response_model=list[ClarificationHistoryRead])
+async def clarification_history(
+    session_id: str,
+    db: AsyncSession = Depends(get_session),
+) -> list[ClarificationHistoryRead]:
+    if await db.get(AnalysisSession, session_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    rows = (await db.execute(
+        select(Clarification, ClarificationAnswer, ClarificationOption)
+        .outerjoin(ClarificationAnswer, ClarificationAnswer.clarification_id == Clarification.id)
+        .outerjoin(ClarificationOption, ClarificationOption.id == ClarificationAnswer.option_id)
+        .where(Clarification.session_id == session_id)
+        .order_by(Clarification.created_at, Clarification.id)
+    )).all()
+    return [ClarificationHistoryRead(
+        id=clarification.id,
+        requirement_id=clarification.requirement_stable_id,
+        question=clarification.question,
+        severity=clarification.severity,
+        status=clarification.status,
+        action=answer.action if answer else None,
+        answer=(answer.custom_answer or (option.label if option else None)) if answer else None,
+        answered_at=answer.created_at if answer else None,
+    ) for clarification, answer, option in rows]
+
+
+AGENT_NAMES = {
+    "Intake", "Document Analysis", "Clarification", "Requirement", "Decomposition",
+    "Backlog", "Enrichment", "Estimation", "Dependency", "Planning Data",
+    "Assignment", "Sprint Planning", "Duplicate Detection", "Quality",
+    "Board Health", "Human Approval", "Publisher",
+}
+
+
+@router.get("/sessions/{session_id}/agents/{agent_name}/messages", response_model=list[AgentMessageRead])
+async def get_agent_messages(
+    session_id: str,
+    agent_name: str,
+    db: AsyncSession = Depends(get_session),
+) -> list[AgentMessageRead]:
+    if await db.get(AnalysisSession, session_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    if agent_name not in AGENT_NAMES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown agent")
+    messages = (await db.execute(
+        select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at, ChatMessage.id)
+    )).scalars().all()
+    result = []
+    for message in messages:
+        try:
+            payload = json.loads(message.content)
+        except ValueError:
+            continue
+        if payload.get("agent_name") == agent_name and isinstance(payload.get("content"), str):
+            result.append(AgentMessageRead(
+                id=message.id, agent_name=agent_name, role=message.role,
+                content=payload["content"], created_at=message.created_at,
+            ))
+    return result
+
+
+@router.post("/sessions/{session_id}/agents/{agent_name}/prompt", response_model=AgentPromptResult)
+async def prompt_agent(
+    session_id: str,
+    agent_name: str,
+    payload: AgentPromptCreate,
+    db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    provider: LLMProvider = Depends(get_llm_provider),
+) -> AgentPromptResult:
+    session = await db.get(AnalysisSession, session_id)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    if agent_name not in AGENT_NAMES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown agent")
+    counts = {
+        "requirements": await db.scalar(select(func.count(Requirement.id)).where(Requirement.session_id == session_id)) or 0,
+        "decompositions": await db.scalar(select(func.count(Decomposition.id)).where(Decomposition.session_id == session_id)) or 0,
+        "epics": await db.scalar(select(func.count(Epic.id)).where(Epic.session_id == session_id)) or 0,
+        "stories": await db.scalar(select(func.count(UserStory.id)).where(UserStory.session_id == session_id)) or 0,
+        "tasks": await db.scalar(select(func.count(Task.id)).where(Task.session_id == session_id)) or 0,
+    }
+    human_message = payload.message.strip()
+    db.add(ChatMessage(
+        session_id=session_id, role="human",
+        content=json.dumps({"agent_name": agent_name, "content": human_message}),
+    ))
+    execution = AgentExecution(
+        session_id=session_id, node_name=f"{agent_name} Feedback",
+        status="running", model=settings.llm_model,
+    )
+    db.add(execution)
+    await db.commit()
+    started_at = monotonic()
+    prompt = (
+        f"You are the {agent_name} agent in a human-governed Scrum workflow. "
+        "The human is reviewing this stage and supplied additional information or dissatisfaction. "
+        "Return exactly one JSON object with this shape: "
+        '{"understanding":"string","affected_artifacts":["string"],'
+        '"needs_clarification":["string"],"revision_plan":["string"]}. '
+        "Use empty arrays when no artifacts or clarifications apply. "
+        "Do not claim that any artifact was changed, approved, or published. Do not invent project facts.\n\n"
+        f"SESSION STATE: {session.status}; CURRENT NODE: {session.current_node}; ARTIFACT COUNTS: {json.dumps(counts)}\n\n"
+        f"HUMAN MESSAGE:\n{human_message}"
+    )
+    try:
+        raw_response = await provider.generate_text(prompt)
+    except LLMAASError as error:
+        execution.status = "failed"
+        execution.error = str(error)
+        execution.duration_ms = round((monotonic() - started_at) * 1000)
+        await db.commit()
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(error)) from error
+    try:
+        feedback = AgentFeedbackDraft.model_validate_json(raw_response)
+    except ValueError:
+        repair_prompt = (
+            "Your previous response did not match the required review schema. "
+            "Return only one JSON object with exactly these four keys: "
+            '"understanding" (string), "affected_artifacts" (array of strings), '
+            '"needs_clarification" (array of strings), and "revision_plan" (non-empty array of strings). '
+            "Use empty arrays where applicable. Do not add wrapper keys or markdown. "
+            "Preserve the meaning of the previous response and do not invent project facts.\n\n"
+            f"PREVIOUS RESPONSE:\n{raw_response}"
+        )
+        try:
+            repaired_response = await provider.generate_text(repair_prompt)
+            feedback = AgentFeedbackDraft.model_validate_json(repaired_response)
+        except (LLMAASError, ValueError) as error:
+            execution.status = "failed"
+            execution.error = "Agent returned an invalid review response after one repair attempt"
+            execution.duration_ms = round((monotonic() - started_at) * 1000)
+            await db.commit()
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, execution.error) from error
+    sections = [f"Understanding\n{feedback.understanding}"]
+    if feedback.affected_artifacts:
+        sections.append("Potentially affected artifacts\n" + "\n".join(f"- {item}" for item in feedback.affected_artifacts))
+    if feedback.needs_clarification:
+        sections.append("Clarification still needed\n" + "\n".join(f"- {item}" for item in feedback.needs_clarification))
+    sections.append("Proposed revision plan\n" + "\n".join(f"- {item}" for item in feedback.revision_plan))
+    response = "\n\n".join(sections)
+    usage = provider.usage
+    execution.status = "completed"
+    execution.input_tokens = usage.input_tokens
+    execution.output_tokens = usage.output_tokens
+    execution.remaining_tokens = usage.remaining_tokens
+    execution.duration_ms = round((monotonic() - started_at) * 1000)
+    db.add(ChatMessage(
+        session_id=session_id, role="assistant",
+        content=json.dumps({"agent_name": agent_name, "content": response}),
+    ))
+    db.add(AuditEvent(
+        project_id=session.project_id, actor="human", action="agent.feedback_requested",
+        entity_type="analysis_session", entity_id=session.id,
+        details_json=json.dumps({"agent_name": agent_name}),
+    ))
+    await db.commit()
+    return AgentPromptResult(agent_name=agent_name, response=response, mutation_applied=False)
 
 
 @router.post("/clarifications/{clarification_id}/answer", response_model=ClarificationAnswerResult)

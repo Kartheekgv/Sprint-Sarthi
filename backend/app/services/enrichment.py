@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import Epic, Task, UserStory
 from app.providers.base import LLMProvider
+from app.services.prompting import compact_json
 from app.schemas.enrichment import EnrichmentBatch
 from app.schemas.provenance import ProvenanceValue, SourceReference
 
@@ -71,7 +72,7 @@ async def generate_enrichment(
             "stories": batch_stories,
             "tasks": [item for item in task_context if item["story_id"] in story_ids],
         }
-        prompt = "Enrich the backlog using this exact shape: " + json.dumps(shape) + "\n\nBACKLOG:\n" + json.dumps(context)
+        prompt = "Enrich the backlog using this exact shape: " + compact_json(shape) + "\n\nBACKLOG:\n" + compact_json(context)
         prompts.append(prompt)
         local_expected = {kind: {item["stable_id"] for item in values} for kind, values in context.items()}
         validation_error = ""

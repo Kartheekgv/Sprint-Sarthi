@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.models.entities import Clarification, ClarificationOption, Document, DocumentSection, Requirement
 from app.providers.base import LLMProvider
+from app.services.prompting import compact_json, json_repair_prompt
 from app.schemas.clarifications import ClarificationBatch
 
 
@@ -62,7 +63,7 @@ async def generate_clarifications(
         "confidence": requirement.confidence,
     } for requirement in requirements]
 
-    prompt = "Generate clarification questions using this exact shape: " + json.dumps({
+    shape = {
         "questions": [{
             "requirement_id": "REQ-001", "question": "string", "reason": "string",
             "severity": "critical | high | medium | low", "missing_field": "string",
@@ -70,14 +71,21 @@ async def generate_clarifications(
             "options": ["string", "string", "string"], "recommended_option": "string",
             "allow_custom_answer": True, "blocking": True, "source_references": ["SRC-0001"],
         }]
-    }) + "\n\nREQUIREMENTS:\n" + json.dumps(requirement_context) + "\n\nSOURCE EVIDENCE:\n" + "\n".join(context_parts)
-    validation_error = ""
+    }
+    prompt = "Generate clarification questions using this exact shape: " + compact_json(shape) + "\n\nREQUIREMENTS:\n" + compact_json(requirement_context) + "\n\nSOURCE EVIDENCE:\n" + "\n".join(context_parts)
+    attempt_prompt = prompt
     for _ in range(2):
-        raw = await provider.generate_text(prompt + validation_error, SYSTEM_PROMPT)
+        raw = await provider.generate_text(attempt_prompt, SYSTEM_PROMPT)
         try:
             batch = ClarificationBatch.model_validate_json(raw)
         except ValidationError as error:
-            validation_error = "\nYour prior output failed schema validation. Correct these errors and return the full JSON again:\n" + str(error)
+            attempt_prompt = json_repair_prompt(
+                raw,
+                str(error),
+                shape,
+                "Allowed source IDs: " + ", ".join(reference_map)
+                + ". Allowed requirement IDs: " + ", ".join(sorted(requirement_ids)),
+            )
             continue
         invalid_references = sorted({
             reference
@@ -95,7 +103,13 @@ async def generate_clarifications(
                 })
                 for question in batch.questions
             ])
-        validation_error = "\nUse only exact SOURCE_ID and REQUIREMENT_ID values supplied in the prompt."
+        attempt_prompt = json_repair_prompt(
+            raw,
+            "Unknown source or requirement IDs were used.",
+            shape,
+            "Allowed source IDs: " + ", ".join(reference_map)
+            + ". Allowed requirement IDs: " + ", ".join(sorted(requirement_ids)),
+        )
     raise ValueError("LLM clarification output failed schema validation after retry")
 
 

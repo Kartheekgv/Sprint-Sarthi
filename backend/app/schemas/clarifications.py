@@ -77,3 +77,40 @@ class ClarificationAnswerResult(BaseModel):
     session_id: str
     session_status: str
     has_next: bool
+
+
+class ClarificationHistoryRead(BaseModel):
+    id: str
+    requirement_id: str
+    question: str
+    severity: str
+    status: str
+    action: str | None
+    answer: str | None
+    answered_at: datetime | None
+
+
+class AgentPromptCreate(BaseModel):
+    message: str = Field(min_length=2, max_length=4000)
+
+
+class AgentFeedbackDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    understanding: str = Field(min_length=2, max_length=2000)
+    affected_artifacts: list[str] = Field(max_length=20)
+    needs_clarification: list[str] = Field(max_length=20)
+    revision_plan: list[str] = Field(min_length=1, max_length=20)
+
+
+class AgentMessageRead(BaseModel):
+    id: str
+    agent_name: str
+    role: Literal["human", "assistant"]
+    content: str
+    created_at: datetime
+
+
+class AgentPromptResult(BaseModel):
+    agent_name: str
+    response: str
+    mutation_applied: bool = False

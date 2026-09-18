@@ -15,6 +15,9 @@ class ProjectRead(BaseModel):
     description: str
     status: str
     created_at: datetime
+    workflow_state: str | None = None
+    current_node: str | None = None
+    agent_index: int | None = None
 
 
 class DocumentRead(BaseModel):
@@ -41,6 +44,9 @@ class DocumentChunkRead(BaseModel):
     token_count: int
     metadata: dict[str, object]
     extraction_confidence: float
+    embedding_status: str
+    embedding_model: str | None
+    embedding_dimensions: int | None
 
 
 class JobRead(BaseModel):

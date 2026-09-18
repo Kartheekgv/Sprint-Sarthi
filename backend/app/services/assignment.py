@@ -10,6 +10,7 @@ from app.models.entities import (
     AssignmentRecommendation, Department, Holiday, Leave, Sprint, Task, TeamMember, UserStory,
 )
 from app.providers.base import LLMProvider
+from app.services.prompting import compact_json
 from app.schemas.planning_data import AssignmentBatch
 from app.schemas.provenance import ProvenanceValue
 
@@ -126,7 +127,7 @@ async def generate_assignments(
             "tasks": [item for item in task_context if item["story_id"] in story_ids],
             **shared_context,
         }
-        prompt = "Recommend assignments using this exact shape: " + json.dumps(shape) + "\n\nPLANNING DATA:\n" + json.dumps(context)
+        prompt = "Recommend assignments using this exact shape: " + compact_json(shape) + "\n\nPLANNING DATA:\n" + compact_json(context)
         prompts.append(prompt)
         local_ids = story_ids | {item["stable_id"] for item in context["tasks"]}
         validation_error = ""

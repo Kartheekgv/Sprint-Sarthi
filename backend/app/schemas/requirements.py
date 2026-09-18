@@ -29,7 +29,7 @@ class RequirementDraft(BaseModel):
 
 class RequirementBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    requirements: list[RequirementDraft] = Field(min_length=1, max_length=40)
+    requirements: list[RequirementDraft] = Field(min_length=1, max_length=100)
 
 
 class RequirementRead(BaseModel):

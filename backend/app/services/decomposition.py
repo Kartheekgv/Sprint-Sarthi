@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.models.entities import Decomposition, Requirement
 from app.providers.base import LLMProvider
+from app.services.prompting import compact_json
 from app.schemas.decomposition import DecompositionBatch
 from app.schemas.provenance import ProvenanceValue, SourceReference
 
@@ -56,7 +57,7 @@ async def generate_decompositions(
         "rationale": "string",
         "confidence": 0.9,
     }]}
-    prompt = "Generate decomposition records using this exact shape: " + json.dumps(shape) + "\n\nREQUIREMENTS:\n" + json.dumps(requirement_context)
+    prompt = "Generate decomposition records using this exact shape: " + compact_json(shape) + "\n\nREQUIREMENTS:\n" + compact_json(requirement_context)
     validation_error = ""
     for _ in range(2):
         raw = await provider.generate_text(prompt + validation_error, SYSTEM_PROMPT)

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import Decomposition, Epic, Task, UserStory
 from app.providers.base import LLMProvider
+from app.services.prompting import compact_json
 from app.schemas.backlog import BacklogBatch
 from app.schemas.provenance import ProvenanceValue, SourceReference
 
@@ -81,11 +82,11 @@ async def generate_backlog(
         allocated_stories += story_quota
         allocated_tasks += task_quota
         prompt = (
-            "Generate an evidence-based backlog batch using this exact shape: " + json.dumps(shape)
+            "Generate an evidence-based backlog batch using this exact shape: " + compact_json(shape)
             + f"\nCreate no more than {epic_quota} epics, {story_quota} stories, and {task_quota} tasks. "
             + "Create only distinct work supported by this batch; do not pad to the limits. "
             + "Every story must have at least one task."
-            + "\n\nDECOMPOSITIONS:\n" + json.dumps(batch_context)
+            + "\n\nDECOMPOSITIONS:\n" + compact_json(batch_context)
         )
         prompts.append(prompt)
         expected_ids = {item["decomposition_id"] for item in batch_context}

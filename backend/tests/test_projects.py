@@ -23,6 +23,22 @@ async def test_create_project_and_upload_pdf(client):
     assert document["sha256"]
     assert document["status"] == "uploaded"
 
+    projects = await client.get("/api/v1/projects")
+    assert projects.status_code == 200
+    assert projects.json()[0]["name"] == "Payments Modernization"
+    assert projects.json()[0]["workflow_state"] == "Document analysis"
+    assert projects.json()[0]["agent_index"] == 1
+
+    documents = await client.get(f"/api/v1/projects/{project['id']}/documents")
+    assert documents.status_code == 200
+    assert [item["document_code"] for item in documents.json()] == ["DOC-001"]
+
+    resumed = await client.get(f"/api/v1/projects/{project['id']}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["session"] is None
+    assert resumed.json()["workflow_state"] == "Document analysis"
+    assert resumed.json()["documents"][0]["document_code"] == "DOC-001"
+
 
 @pytest.mark.asyncio
 async def test_upload_rejects_unsupported_file(client):
@@ -72,6 +88,9 @@ async def test_process_document_extracts_xlsx_content(client):
     assert first_chunk["chunk_id"] == "CHUNK-001"
     assert first_chunk["token_count"] > 0
     assert "Users can approve" in first_chunk["content"]
+    assert first_chunk["embedding_status"] == "not_generated"
+    assert first_chunk["embedding_model"] is None
+    assert first_chunk["embedding_dimensions"] is None
 
 
 @pytest.mark.asyncio

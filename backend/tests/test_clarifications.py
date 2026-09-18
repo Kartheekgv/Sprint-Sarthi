@@ -19,6 +19,13 @@ class FakeProvider:
 
     async def generate_text(self, prompt: str, system_prompt: str | None = None) -> str:
         self.calls += 1
+        if "human-governed Scrum workflow" in prompt:
+            return json.dumps({
+                "understanding": "The reviewer supplied additional constraints for this stage.",
+                "affected_artifacts": ["Requirement recommendations"],
+                "needs_clarification": ["Confirm whether the constraint applies to every user."],
+                "revision_plan": ["Review the cited evidence", "Propose revised requirements for human approval"],
+            })
         if system_prompt and "Duplicate Agent" in system_prompt:
             return json.dumps({"candidates": []})
         if system_prompt and "Sprint Agent" in system_prompt:
@@ -156,6 +163,22 @@ class FakeProvider:
             },
         ]})
 
+
+class RepairingFeedbackProvider(FakeProvider):
+    async def generate_text(self, prompt: str, system_prompt: str | None = None) -> str:
+        if "human-governed Scrum workflow" in prompt:
+            self.calls += 1
+            return json.dumps({"review": "The clarification constraint should apply globally."})
+        if "previous response did not match" in prompt:
+            self.calls += 1
+            return json.dumps({
+                "understanding": "The clarification constraint should apply globally.",
+                "affected_artifacts": ["Clarification decisions"],
+                "needs_clarification": [],
+                "revision_plan": ["Propose the constraint for human review"],
+            })
+        return await super().generate_text(prompt, system_prompt)
+
     async def embed(self, texts):
         return []
 
@@ -192,6 +215,40 @@ async def test_clarification_session_interrupts_and_resumes(client):
     finished = await client.post(f"/api/v1/clarifications/{second['id']}/answer", json={"action": "skip"})
     assert finished.json()["session_status"] == "clarifications_complete"
     assert finished.json()["has_next"] is False
+
+    history = (await client.get(f"/api/v1/sessions/{session['id']}/clarifications")).json()
+    assert [(item["action"], item["answer"]) for item in history] == [
+        ("default", "OIDC"),
+        ("skip", None),
+    ]
+    assert all(item["answered_at"] for item in history)
+
+    feedback = await client.post(
+        f"/api/v1/sessions/{session['id']}/agents/Clarification/prompt",
+        json={"message": "Apply this constraint to all authentication recommendations."},
+    )
+    assert feedback.status_code == 200
+    assert feedback.json()["mutation_applied"] is False
+    assert "Proposed revision plan" in feedback.json()["response"]
+    messages = (await client.get(
+        f"/api/v1/sessions/{session['id']}/agents/Clarification/messages"
+    )).json()
+    assert [item["role"] for item in messages] == ["human", "assistant"]
+    assert "Apply this constraint" in messages[0]["content"]
+    assert "human approval" in messages[1]["content"]
+
+    app.dependency_overrides[get_llm_provider] = lambda: RepairingFeedbackProvider()
+    repaired_feedback = await client.post(
+        f"/api/v1/sessions/{session['id']}/agents/Clarification/prompt",
+        json={"message": "Challenge the scope of the clarification decision."},
+    )
+    assert repaired_feedback.status_code == 200
+    assert repaired_feedback.json()["mutation_applied"] is False
+    assert "Propose the constraint for human review" in repaired_feedback.json()["response"]
+    repaired_messages = (await client.get(
+        f"/api/v1/sessions/{session['id']}/agents/Clarification/messages"
+    )).json()
+    assert [item["role"] for item in repaired_messages] == ["human", "assistant", "human", "assistant"]
 
     generated = await client.post(f"/api/v1/sessions/{session['id']}/generate")
     assert generated.status_code == 200
@@ -363,11 +420,11 @@ async def test_clarification_session_interrupts_and_resumes(client):
     usage_response = await client.get(f"/api/v1/sessions/{session['id']}/usage")
     assert usage_response.status_code == 200
     usage = usage_response.json()
-    assert usage["input_tokens"] == 1100
-    assert usage["output_tokens"] == 220
-    assert usage["total_tokens"] == 1320
+    assert usage["input_tokens"] == 1400
+    assert usage["output_tokens"] == 280
+    assert usage["total_tokens"] == 1680
     assert usage["remaining_tokens"] == 9880
     assert [execution["node_name"] for execution in usage["executions"]] == [
-        "Requirement", "Clarification", "Requirement", "Decomposition", "Backlog", "Enrichment", "Estimation",
-        "Dependency", "Assignment", "Sprint", "Duplicate", "Quality", "BoardHealth"
+        "Requirement", "Clarification", "Clarification Feedback", "Clarification Feedback", "Requirement", "Decomposition", "Backlog",
+        "Enrichment", "Estimation", "Dependency", "Assignment", "Sprint", "Duplicate", "Quality", "BoardHealth"
     ]

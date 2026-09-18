@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import Task, UserStory
 from app.providers.base import LLMProvider
+from app.services.prompting import compact_json
 from app.schemas.estimation import EstimationBatch
 from app.schemas.provenance import ProvenanceValue, SourceReference
 
@@ -59,7 +60,7 @@ async def generate_estimates(
             "stories": batch_stories,
             "tasks": [item for item in task_context if item["story_id"] in story_ids],
         }
-        prompt = "Estimate the backlog using this exact shape: " + json.dumps(shape) + "\n\nBACKLOG:\n" + json.dumps(context)
+        prompt = "Estimate the backlog using this exact shape: " + compact_json(shape) + "\n\nBACKLOG:\n" + compact_json(context)
         prompts.append(prompt)
         expected_local_tasks = {item["stable_id"] for item in context["tasks"]}
         validation_error = ""
