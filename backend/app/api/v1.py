@@ -2004,6 +2004,25 @@ async def answer_quality_clarification(
     return QualityClarificationRead.model_validate(quality_clarification_to_dict(clarification))
 
 
+@router.get("/sessions/{session_id}/board-health", response_model=BoardHealthGenerationResult)
+async def get_session_board_health(
+    session_id: str,
+    db: AsyncSession = Depends(get_session),
+) -> BoardHealthGenerationResult:
+    session = await db.get(AnalysisSession, session_id)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    if session.status not in {"awaiting_approval", "approved", "published"}:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Complete board health assessment before viewing board health")
+    health = await run_board_health(db, session.project_id, session.id)
+    await db.commit()
+    return BoardHealthGenerationResult(
+        session_id=session.id,
+        session_status=session.status,
+        health=BoardHealthRead.model_validate(board_health_to_dict(health)),
+    )
+
+
 @router.post("/sessions/{session_id}/board-health", response_model=BoardHealthGenerationResult)
 async def assess_session_board_health(
     session_id: str,

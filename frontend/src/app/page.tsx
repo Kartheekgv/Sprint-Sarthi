@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useState, useSyncExternalStore } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   ArrowRight,
   Bot,
@@ -505,6 +505,7 @@ export default function Home() {
   const [description, setDescription] = useState(initialSnapshot.description ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const agentRailRef = useRef<HTMLElement | null>(null);
 
   const unlockedStage = publishedExport
     ? 6
@@ -547,6 +548,23 @@ export default function Home() {
   const currentAgent = agentStages[visibleAgent];
   const workflowProgress = Math.round(((unlockedAgent + 1) / agentStages.length) * 100);
   const latestAgentProposal = [...agentMessages].reverse().find((message) => message.role === "assistant");
+  const boardHealthAvailable = boardHealth !== null;
+
+  useEffect(() => {
+    const activeAgent = agentRailRef.current?.querySelector<HTMLElement>(`[data-agent-index="${visibleAgent}"]`);
+    activeAgent?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+  }, [visibleAgent, busy]);
+
+  useEffect(() => {
+    if (!session || visibleAgent < 14 || !boardHealthAvailable) return;
+    fetch(`${API_URL}/sessions/${session.id}/board-health`)
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not refresh board health.");
+        return response.json();
+      })
+      .then((result: { health: BoardHealth }) => setBoardHealth(result.health))
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not refresh board health."));
+  }, [session, visibleAgent, publishedExport, boardHealthAvailable]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -688,6 +706,13 @@ export default function Home() {
       const target = window.document.getElementById(agent.target)
         ?? window.document.getElementById(`workflow-stage-${agent.section}`);
       target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  function scrollAgentRail(direction: -1 | 1) {
+    agentRailRef.current?.scrollBy({
+      left: direction * Math.max(320, agentRailRef.current.clientWidth * 0.7),
+      behavior: "smooth",
     });
   }
 
@@ -1824,15 +1849,32 @@ export default function Home() {
           </section>
         ) : (
           <>
+        <div className="agent-rail-shell border border-[var(--line)] bg-white">
+          <div className="agent-rail-toolbar">
+            <div className="agent-rail-state" aria-live="polite">
+              <span className={`agent-rail-state__dot ${busy ? "agent-rail-state__dot--running" : ""}`} />
+              <span>{busy ? `${currentAgent.label} running` : `${unlockedAgent + 1} agents available`}</span>
+            </div>
+            <label className="sr-only" htmlFor="agent-jump">Select agent</label>
+            <select id="agent-jump" value={visibleAgent} onChange={(event) => navigateToAgent(Number(event.target.value))} className="agent-rail-select" aria-label="Select an available agent">
+              {agentStages.map((agent, index) => <option key={agent.label} value={index} disabled={index > unlockedAgent}>{index + 1}. {agent.label}{index > unlockedAgent ? " · Locked" : ""}</option>)}
+            </select>
+            <div className="agent-rail-controls">
+              <button type="button" onClick={() => scrollAgentRail(-1)} aria-label="Scroll agents left" title="Scroll agents left"><ChevronLeft size={17} /></button>
+              <button type="button" onClick={() => scrollAgentRail(1)} aria-label="Scroll agents right" title="Scroll agents right"><ChevronRight size={17} /></button>
+            </div>
+          </div>
         <nav
+          ref={agentRailRef}
           aria-label="Agent workflow progress"
-          className="overflow-x-auto border border-[var(--line)] bg-white px-4"
+          className="agent-rail overflow-x-auto px-4"
         >
           <ol className="grid min-w-[2100px] items-start py-4" style={{ gridTemplateColumns: `repeat(${agentStages.length}, minmax(120px, 1fr))` }}>
             {agentStages.map((agent, index) => (
               <li
                 key={agent.label}
-                className={`relative flex flex-col items-center px-1 text-center text-xs font-bold ${index <= unlockedAgent ? "text-[var(--accent)]" : "text-[var(--muted)]"}`}
+                data-agent-index={index}
+                className={`agent-rail-item relative flex flex-col items-center px-1 text-center text-xs font-bold ${index <= unlockedAgent ? "text-[var(--accent)]" : "text-[var(--muted)]"} ${index === visibleAgent && busy ? "agent-rail-item--running" : ""}`}
               >
                 <div
                   aria-hidden="true"
@@ -1853,7 +1895,7 @@ export default function Home() {
                   aria-label={`${agent.label}${index > unlockedAgent ? " (locked)" : ""}`}
                   className={`relative z-10 grid size-7 place-items-center border disabled:cursor-not-allowed ${index === visibleAgent ? "border-[var(--ink)] bg-[var(--ink)] text-white" : index <= unlockedAgent ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-[var(--line-strong)] bg-white"}`}
                 >
-                  {index < unlockedAgent ? <CheckCircle2 size={14} /> : index + 1}
+                  {index === visibleAgent && busy ? <Loader2 className="animate-spin" size={14} /> : index < unlockedAgent ? <CheckCircle2 size={14} /> : index + 1}
                 </button>
                 <button
                   type="button"
@@ -1867,6 +1909,7 @@ export default function Home() {
             ))}
           </ol>
         </nav>
+        </div>
         <nav className="agent-transition-dock mb-8" aria-label="Move between agents">
           <button type="button" onClick={() => navigateToAgent(visibleAgent - 1)} disabled={visibleAgent === 0} className="agent-transition-dock__button" aria-label={visibleAgent > 0 ? `Previous agent: ${agentStages[visibleAgent - 1].label}` : "No previous agent"}>
             <ChevronLeft size={18} />
@@ -2370,7 +2413,7 @@ export default function Home() {
                         </button>
                       </form>
                     )}
-                    <div className="mt-4 grid gap-4">
+                    {visibleAgent >= 5 && visibleAgent <= 7 && <div className="mt-4 grid gap-4">
                       {backlog.epics.map((epic) => (
                         <article key={epic.id} className="border-l-4 border-[var(--accent)] bg-white p-4">
                           <div className="flex items-start justify-between gap-3">
@@ -2432,10 +2475,10 @@ export default function Home() {
                           </div>
                         </article>
                       ))}
-                    </div>
+                    </div>}
                     {dependencies !== null && (
                       <div className="mt-4 border border-[var(--line)] bg-[var(--soft)] p-4">
-                        <strong className="text-sm">Dependency analysis</strong>
+                        {visibleAgent === 8 && <><strong className="text-sm">Dependency analysis</strong>
                         {dependencies.length === 0 ? (
                           <p className="mt-2 text-sm text-[var(--muted)]">No evidence-supported dependencies were identified.</p>
                         ) : (
@@ -2447,9 +2490,9 @@ export default function Home() {
                               </div>
                             ))}
                           </div>
-                        )}
+                        )}</>}
                         <div id="workflow-content-4-plan" className="scroll-mt-6 mt-4 border-t border-[var(--line)] pt-4">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
+                          {visibleAgent === 9 && <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
                               <strong className="text-sm">Planning data</strong>
                               <p className="mt-1 text-xs text-[var(--muted)]">Upload the Teams, TeamMembers, Sprints, Holidays, and optional Leaves workbook.</p>
@@ -2466,8 +2509,8 @@ export default function Home() {
                             ) : (
                               <><span className="text-sm font-bold text-[var(--accent)]">Planning workbook required</span><input id="planning-data-upload" type="file" accept=".xlsx" onChange={uploadPlanningData} disabled={busy} className="sr-only" /></>
                             )}
-                          </div>
-                          {planningIssues.length > 0 && (
+                          </div>}
+                          {visibleAgent === 9 && planningIssues.length > 0 && (
                             <div className="mt-3 grid gap-2">
                               {planningIssues.map((issue, index) => (
                                 <p key={`${issue.sheet}-${issue.row}-${issue.field}-${index}`} className={`border-l-2 px-3 py-2 text-xs ${issue.blocking ? "border-red-500 bg-red-50 text-red-900" : "border-amber-500 bg-amber-50 text-amber-900"}`}>
@@ -2476,7 +2519,7 @@ export default function Home() {
                               ))}
                             </div>
                           )}
-                          {assignments.length > 0 && (
+                          {visibleAgent === 10 && assignments.length > 0 && (
                             <div className="mt-4 grid gap-2">
                               {assignments.map((assignment) => (
                                 <div key={assignment.id} className="bg-white p-3 text-sm">
@@ -2537,7 +2580,7 @@ export default function Home() {
                               <button type="submit" disabled={busy || sprintScopeTaskIds.length === 0} className="mt-4 flex h-10 items-center gap-2 bg-[var(--ink)] px-4 text-sm font-bold text-white disabled:opacity-50"><CheckCircle2 size={16} /> {sprintScope.reviewed ? "Update approved scope" : "Approve selected scope"}</button>
                             </form>
                           )}
-                          {sprintPlan.length > 0 && (
+                          {visibleAgent === 11 && sprintPlan.length > 0 && (
                             <div id="workflow-content-5" className="scroll-mt-6 mt-4 border-t border-[var(--line)] pt-4">
                               <strong className="text-sm">Proposed sprint plan</strong>
                               <div className="mt-2 grid gap-2">
@@ -2548,6 +2591,20 @@ export default function Home() {
                                   </div>
                                 ))}
                               </div>
+                            </div>
+                          )}
+                          {visibleAgent === 12 && duplicateCandidates.length > 0 && (
+                            <div className="mt-4 grid gap-2">
+                              {duplicateCandidates.map((candidate) => (
+                                <article key={candidate.id} className="border border-[var(--line)] bg-white p-4 text-sm">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <strong>{candidate.source_stable_id} ↔ {candidate.target_stable_id}</strong>
+                                    <span className="bg-amber-100 px-2 py-1 text-xs font-bold text-amber-900">{Math.round(candidate.similarity * 100)}% similar</span>
+                                  </div>
+                                  <p className="mt-2 text-[var(--muted)]">{candidate.rationale}</p>
+                                  <p className="mt-2 text-xs font-bold capitalize text-[var(--accent)]">{candidate.recommendation.replaceAll("_", " ")}</p>
+                                </article>
+                              ))}
                             </div>
                           )}
                           {visibleAgent === 12 && duplicatesComplete && (
@@ -2599,7 +2656,21 @@ export default function Home() {
                               </div>
                             </div>
                           )}
-                          {qualityResults.length > 0 && boardHealth && (
+                          {visibleAgent === 13 && qualityResults.length > 0 && (
+                            <div className="mt-4 border-t border-[var(--line)] pt-4">
+                              <strong className="text-sm">85% readiness results</strong>
+                              <p className="mt-1 text-xs text-[var(--muted)]">{qualityResults.filter((item) => item.passed).length}/{qualityResults.length} backlog items pass the quality gate.</p>
+                              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                {qualityResults.map((result) => (
+                                  <div key={result.id} className={`border-l-2 bg-white p-3 text-xs ${result.passed ? "border-green-500" : "border-red-500"}`}>
+                                    <strong>{result.item_id} · {result.score}%</strong>
+                                    <span className="mt-1 block capitalize text-[var(--muted)]">{result.item_type}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {visibleAgent >= 14 && qualityResults.length > 0 && boardHealth && (
                             <div className="mt-4 border-t border-[var(--line)] pt-4">
                               <div className="flex flex-wrap items-center justify-between gap-3">
                                 <div>

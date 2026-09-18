@@ -60,44 +60,178 @@ Node order: Document Intake, Document Analysis, Clarification, Requirement, Epic
 
 Planning data is imported from the user workbook and validated row by row. Missing or contradictory values create blocking clarification issues; the application does not invent planning facts. Assignment and sprint outputs remain recommendations until an identified human explicitly approves them. Reject and request-changes decisions never invoke the Publisher.
 
-## Windows Setup
+## Local Setup
 
-Prerequisites: Python 3.11+, Node.js 20+, and pnpm. In PowerShell:
+### Prerequisites
+
+- Git
+- Python 3.11 or newer
+- Node.js 20 or newer
+- pnpm 10 (`corepack enable` or `npm install --global pnpm`)
+- LLMAAS credentials with access to the configured chat and embedding models
+
+Verify the toolchain:
+
+```powershell
+git --version
+py -3.11 --version
+node --version
+pnpm --version
+```
+
+### 1. Clone The Repository
+
+```powershell
+git clone <repository-url>
+cd Sprint-Sarthi
+```
+
+### 2. Configure And Start The Backend
+
+Run these commands from the repository root in PowerShell:
 
 ```powershell
 cd backend
 py -3.11 -m venv .venv
 .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -e ".[test,ai]"
 Copy-Item .env.example .env
+```
+
+Edit `backend/.env` and replace these placeholders with valid credentials:
+
+```dotenv
+LLM_API_KEY=<LLMAAS_API_CLIENT_KEY>
+LLMAAS_CLIENT_ID=<CLOUD_IDP_OAUTH_CLIENT_ID>
+LLMAAS_CLIENT_SECRET=<CLOUD_IDP_OAUTH_CLIENT_SECRET>
+```
+
+Keep credentials only in `backend/.env`. Never add secrets to `.env.example`, frontend variables, or Git.
+
+Create/update the SQLite schema and start FastAPI:
+
+```powershell
 python -m alembic upgrade head
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-In a second window:
+Confirm the backend is ready:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+Expected response: `status: ok`. API documentation is available at `http://127.0.0.1:8000/docs`.
+
+### 3. Configure And Start The Frontend
+
+Open a second PowerShell window at the repository root:
 
 ```powershell
 cd frontend
+Copy-Item .env.example .env.local
 pnpm install
-$env:NEXT_PUBLIC_API_URL="http://localhost:8000/api/v1"
 pnpm dev
 ```
 
-Open `http://localhost:3000`; API docs are at `http://localhost:8000/docs`. Root `start-backend.bat` and `start-frontend.bat` scripts provide the same startup flow.
+Open `http://localhost:3000`.
 
-## Migrations And Tests
+The frontend environment file contains:
+
+```dotenv
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000/api/v1
+```
+
+Restart `pnpm dev` after changing this value. If the API uses another port, update both `NEXT_PUBLIC_API_URL` and the backend command. If the frontend uses another origin, also update `FRONTEND_ORIGIN` in `backend/.env` for CORS.
+
+### Windows Startup Scripts
+
+After `backend/.env` has been configured, these scripts can start each service in separate terminals:
+
+```powershell
+.\start-backend.bat
+.\start-frontend.bat
+```
+
+The backend script creates the virtual environment when absent, installs runtime dependencies, applies migrations, and starts port 8000. The frontend script installs packages when absent and starts port 3000.
+
+### macOS Or Linux
+
+Use the same environment values with these command substitutions:
+
+```bash
+cd backend
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[test,ai]'
+cp .env.example .env
+python -m alembic upgrade head
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+In another terminal:
+
+```bash
+cd frontend
+cp .env.example .env.local
+pnpm install
+pnpm dev
+```
+
+## First Run Workflow
+
+1. Open `http://localhost:3000` and create a project.
+2. Upload one or more supported architecture documents.
+3. Process the documents and answer required clarifications.
+4. Run each unlocked agent in order; generated work remains proposed.
+5. At Planning Data, download the editable XLSX template, replace its sample entries, and upload it.
+6. Review assignments, Sprint scope, duplicate candidates, quality, and board health.
+7. Record a named human approval before publishing the six-sheet workbook.
+
+The application never automatically approves, publishes, or silently resequences committed work.
+
+## Tests And Production Build
+
+Backend:
 
 ```powershell
 cd backend
 .venv\Scripts\Activate.ps1
-python -m alembic revision --autogenerate -m "describe change"
-python -m alembic upgrade head
 python -m pytest -q
+```
 
-cd ..\frontend
+Frontend:
+
+```powershell
+cd frontend
 pnpm lint
 pnpm build
+pnpm start
 ```
+
+`pnpm start` serves the production build on `http://localhost:3000` after `pnpm build`.
+
+## Database Migrations
+
+Run migration commands from `backend` with the virtual environment active:
+
+```powershell
+python -m alembic upgrade head
+python -m alembic revision --autogenerate -m "describe change"
+```
+
+SQLite data, uploads, exports, and LangGraph checkpoints are created under `backend/` and are excluded from Git.
+
+## Troubleshooting
+
+- **PowerShell blocks activation:** run `Set-ExecutionPolicy -Scope Process Bypass`, then activate the virtual environment again.
+- **Frontend cannot reach the API:** verify `/health`, confirm `frontend/.env.local`, restart Next.js, and check that `FRONTEND_ORIGIN` matches the browser origin.
+- **Port already in use:** stop the existing process or choose another port and update the matching environment URL.
+- **Planning Data returns 200 but Assignment stays locked:** inspect `requires_clarification` and the blocking sheet/row messages. A validation-only response does not import the workbook.
+- **LLMAAS authentication fails:** verify all three credential values in `backend/.env`; do not place them in frontend environment files.
+- **Reset local data:** stop the backend and remove the SQLite files under `backend/data/`, then run `python -m alembic upgrade head`. This permanently removes local workflow history.
 
 ## Implementation Checklist
 
