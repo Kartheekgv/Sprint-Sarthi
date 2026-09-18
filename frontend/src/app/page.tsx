@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 import {
   ArrowRight,
   Bot,
@@ -23,6 +24,7 @@ import {
   Loader2,
   Plus,
   ShieldCheck,
+  ScrollText,
   Trash2,
   Upload,
   UserRound,
@@ -1748,6 +1750,9 @@ export default function Home() {
             <button type="button" onClick={() => setHomeOpen(true)} className={`flex h-10 items-center gap-2 border px-3 text-xs font-bold ${homeOpen ? "border-[var(--ink)] bg-[var(--ink)] text-white" : "border-[var(--line-strong)] bg-white"}`} aria-label="Project history" title="Project history">
               <HomeIcon size={16} /> <span className="hidden sm:inline">History</span>
             </button>
+            <Link href="/logs" className="flex h-10 items-center gap-2 border border-[var(--line-strong)] bg-white px-3 text-xs font-bold" aria-label="Operational logs" title="Operational logs">
+              <ScrollText size={16} /> <span className="hidden sm:inline">Logs</span>
+            </Link>
             <button type="button" onClick={startNewProject} className="flex h-10 items-center gap-2 bg-[var(--accent)] px-3 text-xs font-bold text-white">
               <Plus size={16} /> <span className="hidden sm:inline">New project</span>
             </button>

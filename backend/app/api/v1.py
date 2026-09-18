@@ -43,7 +43,7 @@ from app.schemas.approval import ApprovalDecisionCreate, ApprovalDecisionRead, E
 from app.schemas.estimation import EstimationBriefCreate, EstimationBriefRead, EstimationBriefWorkspace
 from app.schemas.requirements import RequirementGenerationResult, RequirementRead
 from app.schemas.provenance import ProvenanceValue
-from app.schemas.usage import AgentUsageRead, SessionUsageRead
+from app.schemas.usage import AgentUsageRead, OperationalLogsRead, SessionUsageRead
 from app.services.document_extraction import DocumentExtractionError, extract_document
 from app.services.backlog import backlog_to_dicts, generate_backlog, persist_backlog
 from app.services.enrichment import generate_enrichment, persist_enrichment
@@ -2207,6 +2207,75 @@ async def get_session_usage(session_id: str, db: AsyncSession = Depends(get_sess
             created_at=execution.created_at,
         ) for execution in executions],
     )
+
+
+@router.get("/logs", response_model=OperationalLogsRead)
+async def get_operational_logs(
+    project_id: str | None = Query(default=None),
+    kind: str = Query(default="all", pattern="^(all|audit|execution)$"),
+    limit: int = Query(default=300, ge=1, le=1000),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    projects = (await db.execute(select(Project).order_by(Project.name))).scalars().all()
+    project_by_id = {item.id: item for item in projects}
+    sessions = (await db.execute(select(AnalysisSession))).scalars().all()
+    session_by_id = {item.id: item for item in sessions}
+    entries: list[dict[str, object]] = []
+
+    if kind in {"all", "audit"}:
+        audit_query = select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(limit)
+        if project_id:
+            audit_query = audit_query.where(AuditEvent.project_id == project_id)
+        audits = (await db.execute(audit_query)).scalars().all()
+        for item in audits:
+            try:
+                details = json.loads(item.details_json or "{}")
+            except json.JSONDecodeError:
+                details = {}
+            safe_details = {
+                str(key): value for key, value in details.items()
+                if not any(secret in str(key).lower() for secret in ("secret", "password", "token", "api_key", "credential"))
+                and isinstance(value, (str, int, float, bool, type(None)))
+            }
+            entries.append({
+                "id": item.id, "kind": "audit", "created_at": item.created_at,
+                "project_id": item.project_id,
+                "project_name": project_by_id[item.project_id].name if item.project_id in project_by_id else "Deleted project",
+                "session_id": item.entity_id if item.entity_type == "analysis_session" else None,
+                "source": item.actor, "status": "recorded", "message": item.action,
+                "metadata": {"entity_type": item.entity_type, "entity_id": item.entity_id, **safe_details},
+            })
+
+    if kind in {"all", "execution"}:
+        execution_query = select(AgentExecution)
+        if project_id:
+            execution_query = execution_query.join(
+                AnalysisSession, AgentExecution.session_id == AnalysisSession.id
+            ).where(AnalysisSession.project_id == project_id)
+        execution_query = execution_query.order_by(AgentExecution.created_at.desc()).limit(limit)
+        executions = (await db.execute(execution_query)).scalars().all()
+        for item in executions:
+            session = session_by_id.get(item.session_id)
+            resolved_project_id = session.project_id if session else None
+            entries.append({
+                "id": item.id, "kind": "execution", "created_at": item.created_at,
+                "project_id": resolved_project_id,
+                "project_name": project_by_id[resolved_project_id].name if resolved_project_id in project_by_id else "Deleted project",
+                "session_id": item.session_id, "source": item.node_name, "status": item.status,
+                "message": f"{item.node_name} agent {item.status}",
+                "metadata": {
+                    "model": item.model, "duration_ms": item.duration_ms,
+                    "input_tokens": item.input_tokens, "output_tokens": item.output_tokens,
+                    "remaining_tokens": item.remaining_tokens, "prompt_hash": item.prompt_hash,
+                    "error": item.error[:500] if item.error else None,
+                },
+            })
+
+    entries.sort(key=lambda item: item["created_at"], reverse=True)
+    return {
+        "entries": entries[:limit],
+        "projects": [{"id": item.id, "name": item.name} for item in projects],
+    }
 
 
 @router.get("/backlog/{item_type}/{item_id}/sources", response_model=BacklogSourcesRead)
