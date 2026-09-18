@@ -7,9 +7,9 @@ from openpyxl.utils import get_column_letter
 
 
 SHEETS: dict[str, tuple[str, ...]] = {
-    "Epics": ("Epic ID", "Epic Title", "Description", "Business Value", "Priority", "Acceptance Criteria", "Source Reference", "Quality Score"),
-    "User Stories": ("Story ID", "Epic ID", "Story Title", "User Story", "Description", "Acceptance Criteria", "Priority", "Story Points", "Dependencies", "Suggested Assignee", "Department", "Sprint", "Status", "Quality Score", "Source Reference"),
-    "Tasks": ("Task ID", "Story ID", "Epic ID", "Task Title", "Description", "Task Type", "Priority", "Estimated Hours", "Dependencies", "Suggested Assignee", "Department", "Sprint", "Status"),
+    "Epics": ("Epic ID", "Architecture Layer", "Epic Title", "Description", "Business Value", "Priority", "Acceptance Criteria", "Source Reference", "Quality Score"),
+    "User Stories": ("Story ID", "Feature ID", "Feature Title", "Epic ID", "Story Title", "User Story", "Description", "Acceptance Criteria", "Definition of Done", "Priority", "Story Points", "Dependencies", "Suggested Assignee", "Department", "Sprint", "Status", "Quality Score", "Source Reference"),
+    "Tasks": ("Task ID", "Story ID", "Feature ID", "Epic ID", "Task Title", "Description", "Task Type", "Work Category", "Acceptance Criteria", "Definition of Done", "Priority", "Estimated Hours", "Dependencies", "Suggested Assignee", "Department", "Sprint", "Status", "Source Reference"),
     "Sprint Plan": ("Sprint", "Story ID", "Story Title", "Story Points", "Suggested Assignee", "Available Capacity", "Dependencies", "Priority", "Reason for Selection"),
     "Dependencies": ("Source ID", "Source Title", "Target ID", "Target Title", "Dependency Type", "Risk", "Explanation"),
     "Quality Report": ("Item ID", "Item Type", "Quality Score", "Missing Acceptance Criteria", "Duplicate", "Ambiguous", "Dependency Issue", "Estimation Issue", "Recommendation"),

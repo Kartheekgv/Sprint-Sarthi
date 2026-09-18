@@ -60,6 +60,25 @@ async def test_upload_requires_existing_project(client):
 
 
 @pytest.mark.asyncio
+async def test_delete_project_removes_project_and_documents(client):
+    created = await client.post("/api/v1/projects", json={"name": "Disposable Project"})
+    project_id = created.json()["id"]
+    uploaded = await client.post(
+        f"/api/v1/projects/{project_id}/documents",
+        files={"file": ("architecture.pdf", b"%PDF disposable", "application/pdf")},
+    )
+    assert uploaded.status_code == 201
+
+    deleted = await client.delete(f"/api/v1/projects/{project_id}")
+    assert deleted.status_code == 204
+    assert (await client.get(f"/api/v1/projects/{project_id}/documents")).status_code == 404
+
+    projects = (await client.get("/api/v1/projects")).json()
+    assert all(item["id"] != project_id for item in projects)
+    assert (await client.delete(f"/api/v1/projects/{project_id}")).status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_process_document_extracts_xlsx_content(client):
     workbook = Workbook()
     sheet = workbook.active

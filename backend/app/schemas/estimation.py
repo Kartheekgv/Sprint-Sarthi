@@ -1,6 +1,36 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class EstimationBriefCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    answered_by: str = Field(min_length=2, max_length=200)
+    ranked_epic_ids: list[str] = Field(min_length=1, max_length=30)
+    priority_rationale: str = Field(min_length=10, max_length=4000)
+
+
+class EstimationBriefRead(EstimationBriefCreate):
+    id: str
+    session_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class EstimationEpicOption(BaseModel):
+    stable_id: str
+    title: str
+    business_value: str
+    architecture_layer: str
+    current_priority: str
+
+
+class EstimationBriefWorkspace(BaseModel):
+    brief: EstimationBriefRead | None
+    epics: list[EstimationEpicOption]
+    parallel_groups: list[list[str]]
+    parallelism_note: str
 
 
 class StoryEstimate(BaseModel):

@@ -4,8 +4,8 @@ from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Path as ApiPath, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Path as ApiPath, UploadFile, status
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,7 @@ from app.core.database import get_session
 from app.models.entities import (
     AgentExecution, AnalysisSession, Approval, AssignmentRecommendation, AuditEvent, BoardHealthResult, Clarification, ClarificationAnswer,
     ChatMessage, ClarificationOption, Decomposition, Dependency, Document, DocumentSection, DuplicateCandidate, Epic, Job, Project, Requirement,
-    Export, QualityResult, Sprint, SprintPlanDecision, Task, UserStory,
+    EstimationBrief, Export, Feature, NewStoryCheck, QualityClarification, QualityResult, Sprint, SprintItem, SprintPlanDecision, SprintScopeReview, Task, UserStory,
 )
 from app.providers import get_llm_provider
 from app.providers.base import LLMProvider
@@ -24,16 +24,23 @@ from app.schemas.clarifications import (
     AgentFeedbackDraft, AgentMessageRead, AgentPromptCreate, AgentPromptResult, ClarificationHistoryRead,
     ClarificationOptionRead, ClarificationRead,
 )
-from app.schemas.backlog import BacklogGenerationResult, EpicRead, StoryRead, TaskRead
+from app.schemas.backlog import BacklogGenerationResult, EpicRead, FeatureRead, StoryRead, TaskRead
 from app.schemas.evidence import BacklogItemType, BacklogSourcesRead
 from app.schemas.decomposition import DecompositionGenerationResult, DecompositionRead
 from app.schemas.dependencies import DependencyGenerationResult, DependencyRead
-from app.schemas.duplicates import DuplicateGenerationResult, DuplicateRead
+from app.schemas.duplicates import (
+    DuplicateGenerationResult, DuplicateRead, NewStoryAssessment, NewStoryCheckCreate,
+    NewStoryCheckRead, NewStoryConfirmCreate, NewStoryCreateResult,
+)
 from app.schemas.projects import DocumentChunkRead, DocumentRead, JobRead, ProjectCreate, ProjectRead
 from app.schemas.planning_data import AssignmentGenerationResult, AssignmentRead, PlanningImportResult
-from app.schemas.sprint_planning import SprintDecisionRead, SprintPlanningResult
-from app.schemas.quality import BoardHealthGenerationResult, BoardHealthRead, QualityGenerationResult, QualityRead
+from app.schemas.sprint_planning import SprintDecisionRead, SprintPlanningResult, SprintScopeReviewCreate, SprintScopeReviewRead
+from app.schemas.quality import (
+    BoardHealthGenerationResult, BoardHealthRead, QualityClarificationAnswerCreate,
+    QualityClarificationRead, QualityGenerationResult, QualityRead,
+)
 from app.schemas.approval import ApprovalDecisionCreate, ApprovalDecisionRead, ExportRead
+from app.schemas.estimation import EstimationBriefCreate, EstimationBriefRead, EstimationBriefWorkspace
 from app.schemas.requirements import RequirementGenerationResult, RequirementRead
 from app.schemas.provenance import ProvenanceValue
 from app.schemas.usage import AgentUsageRead, SessionUsageRead
@@ -43,15 +50,20 @@ from app.services.enrichment import generate_enrichment, persist_enrichment
 from app.services.estimation import generate_estimates, persist_estimates
 from app.services.dependencies import dependency_to_dict, generate_dependencies, persist_dependencies
 from app.services.duplicates import duplicate_to_dict, generate_duplicates, persist_duplicates
+from app.services.new_stories import assess_new_story
 from app.services.decomposition import decomposition_to_dict, generate_decompositions, persist_decompositions
 from app.services.evidence import resolve_item_evidence
 from app.services.clarifications import generate_clarifications, persist_clarifications
 from app.services.uploads import save_upload
 from app.services.requirements import generate_requirements, persist_requirements, requirement_to_dict
-from app.services.planning_data import parse_planning_workbook, persist_planning_workbook
+from app.services.planning_data import build_planning_template, parse_planning_workbook, persist_planning_workbook
 from app.services.assignment import assignments_to_dicts, generate_assignments, persist_assignments
-from app.services.sprint_planning import generate_sprint_plan, persist_sprint_plan, sprint_plan_to_dicts
-from app.services.quality import board_health_to_dict, quality_to_dict, run_board_health, run_quality_checks
+from app.services.sprint_planning import ORDERING_HEURISTIC, generate_sprint_plan, persist_sprint_plan, sprint_plan_forecast, sprint_plan_to_dicts
+from app.services.quality import (
+    QUALITY_THRESHOLD, apply_quality_clarification, board_health_to_dict,
+    create_quality_clarifications, quality_clarification_to_dict, quality_to_dict,
+    run_board_health, run_quality_checks,
+)
 from app.services.publication import publish_session_workbook
 from app.workflows.clarification import ClarificationState, resume_clarification_graph, start_clarification_graph
 from app.workflows.backlog import BacklogState, checkpoint_backlog_stage
@@ -67,6 +79,27 @@ from app.workflows.requirements import RequirementState, checkpoint_requirement_
 
 
 router = APIRouter()
+
+
+def estimation_brief_to_read(record: EstimationBrief) -> EstimationBriefRead:
+    return EstimationBriefRead(
+        id=record.id,
+        session_id=record.session_id,
+        answered_by=record.answered_by,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        **json.loads(record.answers_json),
+    )
+
+
+def new_story_check_to_read(record: NewStoryCheck) -> NewStoryCheckRead:
+    return NewStoryCheckRead(
+        id=record.id,
+        session_id=record.session_id,
+        proposal=NewStoryCheckCreate.model_validate(json.loads(record.input_json)),
+        status=record.status,
+        **json.loads(record.result_json),
+    )
 
 
 
@@ -99,6 +132,7 @@ def project_workflow_state(project: Project, documents: list[Document], session:
         "assignment_complete": "Ready for sprint planning",
         "sprint_planning_complete": "Ready for duplicate detection",
         "duplicates_complete": "Ready for quality review",
+        "quality_clarification_required": "Quality clarification required",
         "quality_complete": "Ready for board health",
         "awaiting_approval": "Awaiting human approval",
         "approved": "Approved, ready to publish",
@@ -142,6 +176,31 @@ async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_
     await db.commit()
     await db.refresh(project)
     return project
+
+
+@router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project(
+    project_id: str,
+    db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    documents = (await db.execute(select(Document).where(Document.project_id == project_id))).scalars().all()
+    exports = (await db.execute(select(Export).where(Export.project_id == project_id))).scalars().all()
+    upload_paths = [(settings.upload_dir / item.stored_name).resolve() for item in documents]
+    export_paths = [Path(item.filename).resolve() for item in exports]
+    await db.delete(project)
+    await db.commit()
+    upload_root = settings.upload_dir.resolve()
+    export_root = settings.export_dir.resolve()
+    for path in upload_paths:
+        if upload_root in path.parents:
+            path.unlink(missing_ok=True)
+    for path in export_paths:
+        if export_root in path.parents:
+            path.unlink(missing_ok=True)
 
 
 @router.get("/projects/{project_id}/documents", response_model=list[DocumentRead])
@@ -194,7 +253,7 @@ async def resume_project_workflow(
         "decomposition_complete", "backlog_complete", "enrichment_complete",
         "estimation_complete", "dependencies_complete", "planning_data_ready",
         "assignment_complete", "sprint_planning_complete", "duplicates_complete",
-        "quality_complete", "awaiting_approval", "approved", "published",
+        "quality_clarification_required", "quality_complete", "awaiting_approval", "approved", "published",
     ]
     progress_status = {
         "review_rejected": "awaiting_approval",
@@ -229,10 +288,11 @@ async def resume_project_workflow(
         base["decompositions"] = [DecompositionRead.model_validate(decomposition_to_dict(item)).model_dump() for item in decompositions]
     if rank >= status_order.index("backlog_complete"):
         epics = (await db.execute(select(Epic).where(Epic.session_id == session.id).order_by(Epic.stable_id))).scalars().all()
+        features = (await db.execute(select(Feature).where(Feature.session_id == session.id).order_by(Feature.stable_id))).scalars().all()
         stories = (await db.execute(select(UserStory).where(UserStory.session_id == session.id).order_by(UserStory.stable_id))).scalars().all()
         tasks = (await db.execute(select(Task).where(Task.session_id == session.id).order_by(Task.stable_id))).scalars().all()
-        epic_rows, story_rows, task_rows = backlog_to_dicts(epics, stories, tasks)
-        base["backlog"] = {"epics": epic_rows, "stories": story_rows, "tasks": task_rows}
+        epic_rows, feature_rows, story_rows, task_rows = backlog_to_dicts(epics, features, stories, tasks)
+        base["backlog"] = {"epics": epic_rows, "features": feature_rows, "stories": story_rows, "tasks": task_rows}
         base["enriched"] = rank >= status_order.index("enrichment_complete")
         base["estimated"] = rank >= status_order.index("estimation_complete")
     if rank >= status_order.index("dependencies_complete"):
@@ -376,23 +436,16 @@ async def get_document_chunks(document_id: str, db: AsyncSession = Depends(get_s
     ) for chunk in chunks]
 
 
-@router.post("/projects/{project_id}/sessions", response_model=AnalysisSessionRead, status_code=status.HTTP_201_CREATED)
-async def create_analysis_session(
+async def prepare_analysis_session(
     project_id: str,
+    session_id: str,
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
     provider: LLMProvider = Depends(get_llm_provider),
-) -> AnalysisSession:
-    if await db.get(Project, project_id) is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
-    session = AnalysisSession(
-        project_id=project_id,
-        thread_id=str(uuid4()),
-        status="processing_requirements",
-        current_node="Requirement",
-    )
-    db.add(session)
-    await db.flush()
+) -> None:
+    session = await db.get(AnalysisSession, session_id)
+    if session is None:
+        return
     requirement_execution = AgentExecution(
         session_id=session.id,
         node_name="Requirement",
@@ -417,8 +470,7 @@ async def create_analysis_session(
         requirement_execution.error = str(error)
         session.status = "failed"
         await db.commit()
-        error_status = status.HTTP_502_BAD_GATEWAY if isinstance(error, LLMAASError) else status.HTTP_422_UNPROCESSABLE_CONTENT
-        raise HTTPException(error_status, str(error)) from error
+        return
     requirement_usage = provider.usage
     requirement_execution.status = "completed"
     requirement_execution.prompt_hash = initial_generation.prompt_hash
@@ -451,7 +503,7 @@ async def create_analysis_session(
         execution.error = str(error)
         session.status = "failed"
         await db.commit()
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(error)) from error
+        return
     except ValueError as error:
         usage = provider.usage
         execution.status = "failed"
@@ -462,7 +514,7 @@ async def create_analysis_session(
         execution.error = str(error)
         session.status = "failed"
         await db.commit()
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+        return
     usage = provider.usage
     execution.status = "completed"
     execution.input_tokens = max(0, usage.input_tokens - requirement_usage.input_tokens)
@@ -479,7 +531,40 @@ async def create_analysis_session(
         question_ids=question_ids,
         status="awaiting_clarification",
     ), settings.checkpoint_database_path)
+
+
+@router.post("/projects/{project_id}/sessions", response_model=AnalysisSessionRead, status_code=status.HTTP_201_CREATED)
+async def create_analysis_session(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    provider: LLMProvider = Depends(get_llm_provider),
+) -> AnalysisSession:
+    if await db.get(Project, project_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    existing = await db.scalar(select(AnalysisSession).where(
+        AnalysisSession.project_id == project_id,
+        AnalysisSession.status.in_(("processing_requirements", "processing_clarifications", "awaiting_clarification")),
+    ).order_by(AnalysisSession.created_at.desc()))
+    if existing:
+        return existing
+    session = AnalysisSession(
+        project_id=project_id, thread_id=str(uuid4()),
+        status="processing_requirements", current_node="Requirement",
+    )
+    db.add(session)
+    await db.commit()
     await db.refresh(session)
+    background_tasks.add_task(prepare_analysis_session, project_id, session.id, db, settings, provider)
+    return session
+
+
+@router.get("/sessions/{session_id}", response_model=AnalysisSessionRead)
+async def get_analysis_session(session_id: str, db: AsyncSession = Depends(get_session)) -> AnalysisSession:
+    session = await db.get(AnalysisSession, session_id)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
     return session
 
 
@@ -927,21 +1012,28 @@ async def generate_session_backlog(
         epics = (await db.execute(
             select(Epic).where(Epic.session_id == session.id).order_by(Epic.stable_id)
         )).scalars().all()
+        features = (await db.execute(
+            select(Feature).where(Feature.session_id == session.id).order_by(Feature.stable_id)
+        )).scalars().all()
         stories = (await db.execute(
             select(UserStory).where(UserStory.session_id == session.id).order_by(UserStory.stable_id)
         )).scalars().all()
         tasks = (await db.execute(
             select(Task).where(Task.session_id == session.id).order_by(Task.stable_id)
         )).scalars().all()
-        epic_rows, story_rows, task_rows = backlog_to_dicts(epics, stories, tasks)
+        epic_rows, feature_rows, story_rows, task_rows = backlog_to_dicts(epics, features, stories, tasks)
         return BacklogGenerationResult(
             session_id=session.id, session_status=session.status,
             epics=[EpicRead.model_validate(item) for item in epic_rows],
+            features=[FeatureRead.model_validate(item) for item in feature_rows],
             stories=[StoryRead.model_validate(item) for item in story_rows],
             tasks=[TaskRead.model_validate(item) for item in task_rows],
         )
-    if session.status != "decomposition_complete":
+    retrying_failed_backlog = session.status == "failed" and session.current_node == "Backlog"
+    if session.status != "decomposition_complete" and not retrying_failed_backlog:
         raise HTTPException(status.HTTP_409_CONFLICT, "Complete decomposition before backlog generation")
+    if retrying_failed_backlog:
+        session.status = "decomposition_complete"
 
     execution = AgentExecution(
         session_id=session.id,
@@ -954,7 +1046,7 @@ async def generate_session_backlog(
     started_at = monotonic()
     try:
         generation = await generate_backlog(db, session.id, provider)
-        epics, stories, tasks = await persist_backlog(
+        epics, features, stories, tasks = await persist_backlog(
             db, session.project_id, session.id, generation.batch
         )
         usage = provider.usage
@@ -972,7 +1064,7 @@ async def generate_session_backlog(
             entity_type="analysis_session",
             entity_id=session.id,
             details_json=json.dumps({
-                "epics": len(epics), "stories": len(stories), "tasks": len(tasks),
+                "epics": len(epics), "features": len(features), "stories": len(stories), "tasks": len(tasks),
             }),
         ))
         await db.commit()
@@ -985,10 +1077,11 @@ async def generate_session_backlog(
             task_ids=[item.id for item in tasks],
             status="backlog_complete",
         ), settings.checkpoint_database_path)
-        epic_rows, story_rows, task_rows = backlog_to_dicts(epics, stories, tasks)
+        epic_rows, feature_rows, story_rows, task_rows = backlog_to_dicts(epics, features, stories, tasks)
         return BacklogGenerationResult(
             session_id=session.id, session_status=session.status,
             epics=[EpicRead.model_validate(item) for item in epic_rows],
+            features=[FeatureRead.model_validate(item) for item in feature_rows],
             stories=[StoryRead.model_validate(item) for item in story_rows],
             tasks=[TaskRead.model_validate(item) for item in task_rows],
         )
@@ -1029,6 +1122,9 @@ async def enrich_session_backlog(
     epics = (await db.execute(
         select(Epic).where(Epic.session_id == session.id).order_by(Epic.stable_id)
     )).scalars().all()
+    features = (await db.execute(
+        select(Feature).where(Feature.session_id == session.id).order_by(Feature.stable_id)
+    )).scalars().all()
     stories = (await db.execute(
         select(UserStory).where(UserStory.session_id == session.id).order_by(UserStory.stable_id)
     )).scalars().all()
@@ -1036,10 +1132,11 @@ async def enrich_session_backlog(
         select(Task).where(Task.session_id == session.id).order_by(Task.stable_id)
     )).scalars().all()
     if session.status == "enrichment_complete":
-        epic_rows, story_rows, task_rows = backlog_to_dicts(epics, stories, tasks)
+        epic_rows, feature_rows, story_rows, task_rows = backlog_to_dicts(epics, features, stories, tasks)
         return BacklogGenerationResult(
             session_id=session.id, session_status=session.status,
             epics=[EpicRead.model_validate(item) for item in epic_rows],
+            features=[FeatureRead.model_validate(item) for item in feature_rows],
             stories=[StoryRead.model_validate(item) for item in story_rows],
             tasks=[TaskRead.model_validate(item) for item in task_rows],
         )
@@ -1072,10 +1169,11 @@ async def enrich_session_backlog(
             project_id=session.project_id, session_id=session.id,
             thread_id=session.thread_id, status="enrichment_complete",
         ), settings.checkpoint_database_path)
-        epic_rows, story_rows, task_rows = backlog_to_dicts(epics, stories, tasks)
+        epic_rows, feature_rows, story_rows, task_rows = backlog_to_dicts(epics, features, stories, tasks)
         return BacklogGenerationResult(
             session_id=session.id, session_status=session.status,
             epics=[EpicRead.model_validate(item) for item in epic_rows],
+            features=[FeatureRead.model_validate(item) for item in feature_rows],
             stories=[StoryRead.model_validate(item) for item in story_rows],
             tasks=[TaskRead.model_validate(item) for item in task_rows],
         )
@@ -1101,6 +1199,97 @@ async def enrich_session_backlog(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
 
 
+@router.get("/sessions/{session_id}/dependency-order", response_model=EstimationBriefWorkspace)
+@router.get("/sessions/{session_id}/estimation-brief", response_model=EstimationBriefWorkspace, include_in_schema=False)
+async def get_estimation_brief(
+    session_id: str,
+    db: AsyncSession = Depends(get_session),
+) -> EstimationBriefWorkspace:
+    if await db.get(AnalysisSession, session_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    record = await db.scalar(select(EstimationBrief).where(EstimationBrief.session_id == session_id))
+    epics = (await db.execute(select(Epic).where(Epic.session_id == session_id).order_by(Epic.stable_id))).scalars().all()
+    stories = (await db.execute(select(UserStory).where(UserStory.session_id == session_id))).scalars().all()
+    dependencies = (await db.execute(select(Dependency).where(Dependency.session_id == session_id))).scalars().all()
+    epic_by_story_id = {item.stable_id: item.epic_id for item in stories}
+    epic_stable_by_id = {item.id: item.stable_id for item in epics}
+    requirement_ids_by_epic = {item.stable_id: set(json.loads(item.requirement_ids_json)) for item in epics}
+    dependency_conflicts = {
+        frozenset((epic_stable_by_id[epic_by_story_id[item.source_stable_id]], epic_stable_by_id[epic_by_story_id[item.target_stable_id]]))
+        for item in dependencies
+        if item.source_stable_id in epic_by_story_id and item.target_stable_id in epic_by_story_id
+        and epic_by_story_id[item.source_stable_id] != epic_by_story_id[item.target_stable_id]
+    }
+    parallel_groups: list[list[str]] = []
+    for epic in epics:
+        placed = False
+        for group in parallel_groups:
+            if all(
+                not requirement_ids_by_epic[epic.stable_id] & requirement_ids_by_epic[member]
+                and frozenset((epic.stable_id, member)) not in dependency_conflicts
+                for member in group
+            ):
+                group.append(epic.stable_id)
+                placed = True
+                break
+        if not placed:
+            parallel_groups.append([epic.stable_id])
+    return EstimationBriefWorkspace(
+        brief=estimation_brief_to_read(record) if record else None,
+        epics=[{
+            "stable_id": item.stable_id, "title": item.title, "business_value": item.business_value,
+            "architecture_layer": item.architecture_layer, "current_priority": item.priority,
+        } for item in epics],
+        parallel_groups=parallel_groups,
+        parallelism_note=(
+            "Parallel groups are calculated from analyzed story dependencies and non-overlapping requirement lineage. Human review remains required before sprint commitment."
+            if dependencies else
+            "Preliminary groups use non-overlapping requirement lineage. Run Dependency Analysis before accepting this ordering."
+        ),
+    )
+
+
+@router.put("/sessions/{session_id}/dependency-order", response_model=EstimationBriefRead)
+@router.put("/sessions/{session_id}/estimation-brief", response_model=EstimationBriefRead, include_in_schema=False)
+async def save_estimation_brief(
+    session_id: str,
+    payload: EstimationBriefCreate,
+    db: AsyncSession = Depends(get_session),
+) -> EstimationBriefRead:
+    session = await db.get(AnalysisSession, session_id)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    if session.status not in {"estimation_complete", "dependencies_complete"}:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Complete estimation before recording the Dependency Epic order")
+    epic_ids = set((await db.execute(select(Epic.stable_id).where(Epic.session_id == session_id))).scalars().all())
+    supplied_epics = payload.ranked_epic_ids
+    if len(supplied_epics) != len(set(supplied_epics)) or set(supplied_epics) != epic_ids:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Rank every generated Epic exactly once using supplied IDs")
+    record = await db.scalar(select(EstimationBrief).where(EstimationBrief.session_id == session_id))
+    answers = payload.model_dump(mode="json", exclude={"answered_by"})
+    if record is None:
+        record = EstimationBrief(
+            session_id=session_id,
+            answered_by=payload.answered_by,
+            answers_json=json.dumps(answers),
+        )
+        db.add(record)
+    else:
+        record.answered_by = payload.answered_by
+        record.answers_json = json.dumps(answers)
+    db.add(AuditEvent(
+        project_id=session.project_id,
+        actor=payload.answered_by,
+        action="dependency.epic_order_recorded",
+        entity_type="analysis_session",
+        entity_id=session.id,
+        details_json=json.dumps({"fields": sorted(answers)}),
+    ))
+    await db.commit()
+    await db.refresh(record)
+    return estimation_brief_to_read(record)
+
+
 @router.post("/sessions/{session_id}/estimate", response_model=BacklogGenerationResult)
 async def estimate_session_backlog(
     session_id: str,
@@ -1114,17 +1303,18 @@ async def estimate_session_backlog(
     if session.status not in {"enrichment_complete", "estimation_complete"}:
         raise HTTPException(status.HTTP_409_CONFLICT, "Complete enrichment before estimation")
     epics = (await db.execute(select(Epic).where(Epic.session_id == session.id).order_by(Epic.stable_id))).scalars().all()
+    features = (await db.execute(select(Feature).where(Feature.session_id == session.id).order_by(Feature.stable_id))).scalars().all()
     stories = (await db.execute(select(UserStory).where(UserStory.session_id == session.id).order_by(UserStory.stable_id))).scalars().all()
     tasks = (await db.execute(select(Task).where(Task.session_id == session.id).order_by(Task.stable_id))).scalars().all()
     if session.status == "estimation_complete":
-        epic_rows, story_rows, task_rows = backlog_to_dicts(epics, stories, tasks)
+        epic_rows, feature_rows, story_rows, task_rows = backlog_to_dicts(epics, features, stories, tasks)
         return BacklogGenerationResult(
             session_id=session.id, session_status=session.status,
             epics=[EpicRead.model_validate(item) for item in epic_rows],
+            features=[FeatureRead.model_validate(item) for item in feature_rows],
             stories=[StoryRead.model_validate(item) for item in story_rows],
             tasks=[TaskRead.model_validate(item) for item in task_rows],
         )
-
     execution = AgentExecution(
         session_id=session.id, node_name="Estimation", status="running", model=settings.llm_model,
     )
@@ -1153,10 +1343,11 @@ async def estimate_session_backlog(
             project_id=session.project_id, session_id=session.id,
             thread_id=session.thread_id, status="estimation_complete",
         ), settings.checkpoint_database_path)
-        epic_rows, story_rows, task_rows = backlog_to_dicts(epics, stories, tasks)
+        epic_rows, feature_rows, story_rows, task_rows = backlog_to_dicts(epics, features, stories, tasks)
         return BacklogGenerationResult(
             session_id=session.id, session_status=session.status,
             epics=[EpicRead.model_validate(item) for item in epic_rows],
+            features=[FeatureRead.model_validate(item) for item in feature_rows],
             stories=[StoryRead.model_validate(item) for item in story_rows],
             tasks=[TaskRead.model_validate(item) for item in task_rows],
         )
@@ -1257,6 +1448,15 @@ async def analyze_session_dependencies(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
 
 
+@router.get("/planning-data/template")
+async def download_planning_data_template() -> Response:
+    return Response(
+        content=build_planning_template(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="Sprint-Sarthi-Planning-Data-Template.xlsx"'},
+    )
+
+
 @router.post("/sessions/{session_id}/planning-data", response_model=PlanningImportResult)
 async def import_session_planning_data(
     session_id: str,
@@ -1269,6 +1469,9 @@ async def import_session_planning_data(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
     if session.status not in {"dependencies_complete", "planning_data_ready"}:
         raise HTTPException(status.HTTP_409_CONFLICT, "Complete dependency analysis before importing planning data")
+    epic_count = await db.scalar(select(func.count(Epic.id)).where(Epic.session_id == session_id)) or 0
+    if epic_count and await db.scalar(select(EstimationBrief).where(EstimationBrief.session_id == session_id)) is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Record the reviewed parallel Epic order before importing planning data")
     filename = Path(file.filename or "planning-data.xlsx").name
     if Path(filename).suffix.lower() != ".xlsx":
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Planning data must be an XLSX workbook")
@@ -1382,8 +1585,134 @@ async def assign_session_backlog(
         execution.remaining_tokens = usage.remaining_tokens
         execution.error = str(error)
         execution.duration_ms = round((monotonic() - started_at) * 1000)
+        if str(error) == "Verified team capacity is insufficient for the estimated task hours":
+            session.status = "dependencies_complete"
+            session.current_node = "Planning Data"
+            db.add(AuditEvent(
+                project_id=session.project_id, action="planning_data.revision_requested",
+                entity_type="analysis_session", entity_id=session.id,
+                details_json=json.dumps({"reason": str(error)}),
+            ))
         await db.commit()
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+
+
+async def sprint_scope_review_to_read(
+    db: AsyncSession,
+    session_id: str,
+    review: SprintScopeReview | None,
+) -> SprintScopeReviewRead:
+    stories = (await db.execute(select(UserStory).where(UserStory.session_id == session_id).order_by(UserStory.stable_id))).scalars().all()
+    tasks = (await db.execute(select(Task).where(Task.session_id == session_id).order_by(Task.stable_id))).scalars().all()
+    story_by_id = {item.id: item for item in stories}
+    selected_task_ids = json.loads(review.selected_task_ids_json) if review else [item.stable_id for item in tasks]
+    selected_set = set(selected_task_ids)
+    selected_story_ids = sorted({story_by_id[item.story_id].stable_id for item in tasks if item.stable_id in selected_set})
+    return SprintScopeReviewRead(
+        id=review.id if review else None, session_id=session_id,
+        reviewed_by=review.reviewed_by if review else "",
+        selected_task_ids=selected_task_ids,
+        discarded_task_ids=json.loads(review.discarded_task_ids_json) if review else [],
+        selected_story_ids=selected_story_ids, note=review.note if review else "",
+        reviewed=review is not None,
+        stories=[{
+            "stable_id": story.stable_id, "title": story.title,
+            "story_points": story.story_points or 0, "priority": story.priority,
+            "selected": story.stable_id in selected_story_ids,
+            "tasks": [{
+                "stable_id": task.stable_id, "story_stable_id": story.stable_id,
+                "title": task.title, "work_category": task.work_category,
+                "estimated_hours": task.estimated_hours, "selected": task.stable_id in selected_set,
+            } for task in tasks if task.story_id == story.id],
+        } for story in stories],
+    )
+
+
+@router.get("/sessions/{session_id}/sprint-scope-review", response_model=SprintScopeReviewRead)
+async def get_sprint_scope_review(session_id: str, db: AsyncSession = Depends(get_session)) -> SprintScopeReviewRead:
+    if await db.get(AnalysisSession, session_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    review = await db.scalar(select(SprintScopeReview).where(SprintScopeReview.session_id == session_id))
+    return await sprint_scope_review_to_read(db, session_id, review)
+
+
+@router.put("/sessions/{session_id}/sprint-scope-review", response_model=SprintScopeReviewRead)
+async def save_sprint_scope_review(
+    session_id: str,
+    payload: SprintScopeReviewCreate,
+    db: AsyncSession = Depends(get_session),
+) -> SprintScopeReviewRead:
+    session = await db.get(AnalysisSession, session_id)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    reviewable_statuses = {
+        "assignment_complete", "sprint_planning_complete", "duplicates_complete",
+        "quality_clarification_required", "quality_complete", "awaiting_approval",
+        "approved", "published",
+    }
+    if session.status not in reviewable_statuses:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Complete assignments before reviewing Sprint scope")
+    tasks = (await db.execute(select(Task).where(Task.session_id == session_id))).scalars().all()
+    stories = (await db.execute(select(UserStory).where(UserStory.session_id == session_id))).scalars().all()
+    task_by_id = {item.stable_id: item for item in tasks}
+    story_by_id = {item.id: item for item in stories}
+    selected = payload.selected_task_ids
+    if len(selected) != len(set(selected)) or not set(selected).issubset(task_by_id):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Selected Task scope contains duplicate or unknown IDs")
+    selected_set = set(selected)
+    existing_plans = (await db.execute(select(SprintPlanDecision).where(SprintPlanDecision.session_id == session_id))).scalars().all()
+    committed_sprint_ids = set((await db.execute(select(Sprint.id).where(Sprint.project_id == session.project_id, Sprint.committed.is_(True)))).scalars().all())
+    committed_sprint_id_values = {item.id for item in committed_sprint_ids}
+    committed_story_ids = {
+        item.story_id for item in existing_plans
+        if item.decision == "planned" and item.sprint_id in committed_sprint_id_values
+    }
+    required_committed_tasks = {item.stable_id for item in tasks if item.story_id in committed_story_ids}
+    if not required_committed_tasks.issubset(selected_set):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Tasks in committed Sprints cannot be discarded or re-sequenced")
+    selected_story_ids = sorted({story_by_id[task_by_id[item_id].story_id].stable_id for item_id in selected})
+    discarded_task_ids = sorted(set(task_by_id) - selected_set)
+    selected_story_set = set(selected_story_ids)
+    for task in tasks:
+        task.status = "approved" if task.stable_id in selected_set else "discarded"
+    for story in stories:
+        story.status = "approved" if story.stable_id in selected_story_set else "discarded"
+    review = await db.scalar(select(SprintScopeReview).where(SprintScopeReview.session_id == session_id))
+    if review is None:
+        review = SprintScopeReview(project_id=session.project_id, session_id=session_id, reviewed_by=payload.reviewed_by, selected_task_ids_json="[]", discarded_task_ids_json="[]", selected_story_ids_json="[]")
+        db.add(review)
+    review.reviewed_by = payload.reviewed_by
+    review.selected_task_ids_json = json.dumps(sorted(selected_set))
+    review.discarded_task_ids_json = json.dumps(discarded_task_ids)
+    review.selected_story_ids_json = json.dumps(selected_story_ids)
+    review.note = payload.note
+    existing_sprint_items = {
+        (item.sprint_id, item.story_id) for item in (await db.execute(select(SprintItem))).scalars().all()
+    }
+    for plan in existing_plans:
+        key = (plan.sprint_id, plan.story_id)
+        if plan.decision == "planned" and plan.sprint_id in committed_sprint_id_values and key not in existing_sprint_items:
+            db.add(SprintItem(sprint_id=plan.sprint_id, story_id=plan.story_id, assignee_id=plan.assignee_id, reason=plan.reason))
+    await db.execute(delete(SprintPlanDecision).where(SprintPlanDecision.session_id == session_id))
+    await db.execute(delete(DuplicateCandidate).where(DuplicateCandidate.session_id == session_id))
+    await db.execute(delete(QualityClarification).where(QualityClarification.session_id == session_id))
+    await db.execute(delete(QualityResult).where(QualityResult.session_id == session_id))
+    await db.execute(delete(BoardHealthResult).where(BoardHealthResult.session_id == session_id))
+    await db.execute(delete(Approval).where(Approval.session_id == session_id))
+    await db.execute(delete(Export).where(Export.session_id == session_id))
+    recommendations = (await db.execute(select(AssignmentRecommendation).where(AssignmentRecommendation.session_id == session_id))).scalars().all()
+    for recommendation in recommendations:
+        recommendation.status = "proposed"
+    session.status = "assignment_complete"
+    session.current_node = "Sprint"
+    db.add(AuditEvent(
+        project_id=session.project_id, actor=payload.reviewed_by, action="sprint_scope.reviewed",
+        entity_type="analysis_session", entity_id=session.id,
+        details_json=json.dumps({"approved_tasks": len(selected_set), "discarded_tasks": len(discarded_task_ids), "approved_stories": len(selected_story_ids)}),
+    ))
+    await db.commit()
+    await db.refresh(review)
+    return await sprint_scope_review_to_read(db, session_id, review)
 
 
 @router.post("/sessions/{session_id}/plan-sprints", response_model=SprintPlanningResult)
@@ -1401,12 +1730,17 @@ async def plan_session_sprints(
             select(SprintPlanDecision).where(SprintPlanDecision.session_id == session.id).order_by(SprintPlanDecision.created_at)
         )).scalars().all()
         rows = await sprint_plan_to_dicts(db, existing)
+        completion, planned_points, available_capacity = await sprint_plan_forecast(db, session.project_id, session.id, existing)
         return SprintPlanningResult(
             session_id=session.id, session_status=session.status,
             decisions=[SprintDecisionRead.model_validate(item) for item in rows],
+            ordering_heuristic=ORDERING_HEURISTIC, forecast_completion_date=completion,
+            total_planned_points=planned_points, total_available_capacity_points=available_capacity,
         )
     if session.status != "assignment_complete":
         raise HTTPException(status.HTTP_409_CONFLICT, "Complete assignment recommendations before sprint planning")
+    if await db.scalar(select(SprintScopeReview).where(SprintScopeReview.session_id == session_id)) is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Review and approve the Task scope before sprint planning")
     execution = AgentExecution(
         session_id=session.id, node_name="Sprint", status="running", model=settings.llm_model,
     )
@@ -1436,9 +1770,12 @@ async def plan_session_sprints(
             decision_ids=[item.id for item in decisions], status="sprint_planning_complete",
         ), settings.checkpoint_database_path)
         rows = await sprint_plan_to_dicts(db, decisions)
+        completion, planned_points, available_capacity = await sprint_plan_forecast(db, session.project_id, session.id, decisions)
         return SprintPlanningResult(
             session_id=session.id, session_status=session.status,
             decisions=[SprintDecisionRead.model_validate(item) for item in rows],
+            ordering_heuristic=ORDERING_HEURISTIC, forecast_completion_date=completion,
+            total_planned_points=planned_points, total_available_capacity_points=available_capacity,
         )
     except LLMAASError as error:
         usage = provider.usage
@@ -1509,6 +1846,83 @@ async def analyze_session_duplicates(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
 
 
+@router.post("/sessions/{session_id}/new-story-check", response_model=NewStoryCheckRead)
+async def check_new_story_before_creation(
+    session_id: str,
+    payload: NewStoryCheckCreate,
+    db: AsyncSession = Depends(get_session),
+    provider: LLMProvider = Depends(get_llm_provider),
+) -> NewStoryCheckRead:
+    session = await db.get(AnalysisSession, session_id)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    try:
+        result = await assess_new_story(db, session.project_id, session.id, payload, provider)
+    except LLMAASError as error:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    record = NewStoryCheck(
+        session_id=session.id, input_json=payload.model_dump_json(),
+        result_json=result.assessment.model_dump_json(),
+        status="awaiting_confirmation" if result.assessment.classification == "new" else result.assessment.classification,
+    )
+    db.add(record)
+    db.add(AuditEvent(
+        project_id=session.project_id, action="story.preflight_checked",
+        entity_type="analysis_session", entity_id=session.id,
+        details_json=json.dumps({"classification": result.assessment.classification, "prompt_hash": result.prompt_hash}),
+    ))
+    await db.commit()
+    await db.refresh(record)
+    return new_story_check_to_read(record)
+
+
+@router.post("/sessions/{session_id}/stories", response_model=NewStoryCreateResult, status_code=status.HTTP_201_CREATED)
+async def create_checked_story(
+    session_id: str,
+    payload: NewStoryConfirmCreate,
+    db: AsyncSession = Depends(get_session),
+) -> NewStoryCreateResult:
+    session = await db.get(AnalysisSession, session_id)
+    check = await db.get(NewStoryCheck, payload.check_id)
+    if session is None or check is None or check.session_id != session_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "New-story check not found")
+    assessment = NewStoryAssessment.model_validate_json(check.result_json)
+    if check.status != "awaiting_confirmation" or assessment.classification != "new":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only a genuinely new, explicitly confirmed story can be created")
+    feature = await db.scalar(select(Feature).where(Feature.session_id == session_id, Feature.stable_id == assessment.suggested_feature_id))
+    if feature is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The suggested Feature is no longer available")
+    proposal = NewStoryCheckCreate.model_validate_json(check.input_json)
+    next_number = (await db.scalar(select(func.count(UserStory.id)))) or 0
+    provenance = {
+        field: ProvenanceValue(value=value, origin="human_provided", confidence=1.0, source_references=[], requires_review=False).model_dump(mode="json")
+        for field, value in proposal.model_dump(mode="json").items()
+    }
+    story = UserStory(
+        project_id=session.project_id, session_id=session.id, epic_id=feature.epic_id, feature_id=feature.id,
+        stable_id=f"STORY-{next_number + 1:03d}", decomposition_ids_json="[]", requirement_ids_json="[]",
+        title=proposal.title, user_story=proposal.user_story, description=proposal.description,
+        acceptance_criteria=json.dumps(proposal.acceptance_criteria), definition_of_done_json=json.dumps(proposal.definition_of_done),
+        priority=proposal.priority, story_points=proposal.story_points,
+        source_references_json=json.dumps(proposal.source_references), provenance_json=json.dumps(provenance), status="draft",
+    )
+    db.add(story)
+    check.status = "created"
+    db.add(AuditEvent(
+        project_id=session.project_id, actor="human", action="story.created_after_preflight",
+        entity_type="user_story", entity_id=story.stable_id,
+        details_json=json.dumps({"check_id": check.id, "suggested_sprint_id": assessment.suggested_sprint_id, "sprint_mutation_applied": False}),
+    ))
+    await db.commit()
+    await db.refresh(story)
+    return NewStoryCreateResult(
+        check_id=check.id, story_id=story.id, story_stable_id=story.stable_id,
+        suggested_sprint_id=assessment.suggested_sprint_id, sprint_mutation_applied=False,
+    )
+
+
 @router.post("/sessions/{session_id}/quality", response_model=QualityGenerationResult)
 async def validate_session_quality(
     session_id: str,
@@ -1520,24 +1934,74 @@ async def validate_session_quality(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
     if session.status == "quality_complete":
         existing = (await db.execute(select(QualityResult).where(QualityResult.session_id == session.id))).scalars().all()
-        return QualityGenerationResult(session_id=session.id, session_status=session.status, results=[QualityRead.model_validate(quality_to_dict(item)) for item in existing])
+        clarifications = (await db.execute(select(QualityClarification).where(QualityClarification.session_id == session.id))).scalars().all()
+        return QualityGenerationResult(session_id=session.id, session_status=session.status, results=[QualityRead.model_validate(quality_to_dict(item)) for item in existing], clarifications=[QualityClarificationRead.model_validate(quality_clarification_to_dict(item)) for item in clarifications])
+    if session.status == "quality_clarification_required":
+        existing = (await db.execute(select(QualityResult).where(QualityResult.session_id == session.id))).scalars().all()
+        clarifications = (await db.execute(select(QualityClarification).where(QualityClarification.session_id == session.id))).scalars().all()
+        return QualityGenerationResult(session_id=session.id, session_status=session.status, results=[QualityRead.model_validate(quality_to_dict(item)) for item in existing], clarifications=[QualityClarificationRead.model_validate(quality_clarification_to_dict(item)) for item in clarifications])
     if session.status != "duplicates_complete":
         raise HTTPException(status.HTTP_409_CONFLICT, "Complete duplicate analysis before quality validation")
     started_at = monotonic()
     execution = AgentExecution(session_id=session.id, node_name="Quality", status="running", model="deterministic-rules")
     db.add(execution)
     await db.flush()
+    await db.execute(delete(QualityResult).where(QualityResult.session_id == session.id))
     results = await run_quality_checks(db, session.project_id, session.id)
     execution.status = "completed"
     execution.input_tokens = 0
     execution.output_tokens = 0
     execution.duration_ms = round((monotonic() - started_at) * 1000)
-    session.status = "quality_complete"
-    session.current_node = "BoardHealth"
-    db.add(AuditEvent(project_id=session.project_id, action="quality.validated", entity_type="analysis_session", entity_id=session.id, details_json=json.dumps({"count": len(results), "failed": sum(item.score < 80 for item in results)})))
+    failed = [item for item in results if item.score < QUALITY_THRESHOLD]
+    clarifications = await create_quality_clarifications(db, session.id, results) if failed else []
+    session.status = "quality_clarification_required" if failed else "quality_complete"
+    session.current_node = "Quality" if failed else "BoardHealth"
+    db.add(AuditEvent(project_id=session.project_id, action="quality.validated", entity_type="analysis_session", entity_id=session.id, details_json=json.dumps({"count": len(results), "failed": len(failed), "threshold": QUALITY_THRESHOLD})))
     await db.commit()
-    await checkpoint_validation_stage(ValidationState(project_id=session.project_id, session_id=session.id, thread_id=session.thread_id, status="quality_complete"), settings.checkpoint_database_path, "quality")
-    return QualityGenerationResult(session_id=session.id, session_status=session.status, results=[QualityRead.model_validate(quality_to_dict(item)) for item in results])
+    if not failed:
+        await checkpoint_validation_stage(ValidationState(project_id=session.project_id, session_id=session.id, thread_id=session.thread_id, status="quality_complete"), settings.checkpoint_database_path, "quality")
+    return QualityGenerationResult(session_id=session.id, session_status=session.status, results=[QualityRead.model_validate(quality_to_dict(item)) for item in results], clarifications=[QualityClarificationRead.model_validate(quality_clarification_to_dict(item)) for item in clarifications])
+
+
+@router.get("/sessions/{session_id}/quality-clarifications", response_model=list[QualityClarificationRead])
+async def get_quality_clarifications(session_id: str, db: AsyncSession = Depends(get_session)) -> list[QualityClarificationRead]:
+    if await db.get(AnalysisSession, session_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    records = (await db.execute(select(QualityClarification).where(QualityClarification.session_id == session_id).order_by(QualityClarification.created_at))).scalars().all()
+    return [QualityClarificationRead.model_validate(quality_clarification_to_dict(item)) for item in records]
+
+
+@router.put("/quality-clarifications/{clarification_id}/answer", response_model=QualityClarificationRead)
+async def answer_quality_clarification(
+    clarification_id: str,
+    payload: QualityClarificationAnswerCreate,
+    db: AsyncSession = Depends(get_session),
+) -> QualityClarificationRead:
+    clarification = await db.get(QualityClarification, clarification_id)
+    if clarification is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Quality clarification not found")
+    if clarification.status == "answered":
+        return QualityClarificationRead.model_validate(quality_clarification_to_dict(clarification))
+    model = {"epic": Epic, "feature": Feature, "story": UserStory, "task": Task}[clarification.item_type]
+    item = await db.scalar(select(model).where(model.session_id == clarification.session_id, model.stable_id == clarification.item_id))
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Backlog item not found")
+    try:
+        apply_quality_clarification(item, clarification.item_type, json.loads(clarification.missing_fields_json), payload.values)
+    except ValueError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    clarification.answer_json = json.dumps(payload.values)
+    clarification.status = "answered"
+    session = await db.get(AnalysisSession, clarification.session_id)
+    pending = await db.scalar(select(func.count(QualityClarification.id)).where(QualityClarification.session_id == clarification.session_id, QualityClarification.status == "pending", QualityClarification.id != clarification.id))
+    if session and not pending:
+        session.status = "duplicates_complete"
+        session.current_node = "Quality"
+    if session:
+        db.add(AuditEvent(project_id=session.project_id, actor="human", action="quality.clarification_answered", entity_type=clarification.item_type, entity_id=clarification.item_id, details_json=json.dumps({"fields": sorted(payload.values)})))
+    await db.commit()
+    await db.refresh(clarification)
+    return QualityClarificationRead.model_validate(quality_clarification_to_dict(clarification))
 
 
 @router.post("/sessions/{session_id}/board-health", response_model=BoardHealthGenerationResult)
@@ -1550,9 +2014,9 @@ async def assess_session_board_health(
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
     if session.status == "awaiting_approval":
-        existing = await db.scalar(select(BoardHealthResult).where(BoardHealthResult.session_id == session.id))
-        if existing:
-            return BoardHealthGenerationResult(session_id=session.id, session_status=session.status, health=BoardHealthRead.model_validate(board_health_to_dict(existing)))
+        health = await run_board_health(db, session.project_id, session.id)
+        await db.commit()
+        return BoardHealthGenerationResult(session_id=session.id, session_status=session.status, health=BoardHealthRead.model_validate(board_health_to_dict(health)))
     if session.status != "quality_complete":
         raise HTTPException(status.HTTP_409_CONFLICT, "Complete quality validation before board health assessment")
     started_at = monotonic()

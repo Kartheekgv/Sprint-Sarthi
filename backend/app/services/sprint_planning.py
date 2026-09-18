@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import (
-    AssignmentRecommendation, Dependency, Sprint, SprintPlanDecision, TeamMember, UserStory,
+    AssignmentRecommendation, Dependency, Sprint, SprintItem, SprintPlanDecision, SprintScopeReview, TeamMember, UserStory,
 )
 from app.providers.base import LLMProvider
 from app.services.prompting import compact_json
@@ -19,6 +19,7 @@ SYSTEM_PROMPT = """You are Sprint Sarthi's Sprint Agent. Return JSON only and ne
 Create a capacity-aware recommendation for every supplied story. Use only supplied sprint and assignee IDs. Respect priority, dependency order, sprint dates, capacity points, holidays, leave-adjusted member capacity, and proposed ownership. Mark work deferred when it cannot fit safely. Do not commit a sprint or approve any recommendation."""
 
 STORIES_PER_BATCH = 10
+ORDERING_HEURISTIC = "dependency-first topological order, then priority and risk, with capacity-constrained placement"
 
 
 @dataclass(frozen=True)
@@ -29,32 +30,48 @@ class SprintPlanningGeneration:
 
 async def generate_sprint_plan(db: AsyncSession, project_id: str, session_id: str, provider: LLMProvider) -> SprintPlanningGeneration:
     stories = (await db.execute(select(UserStory).where(UserStory.session_id == session_id).order_by(UserStory.stable_id))).scalars().all()
+    scope_review = await db.scalar(select(SprintScopeReview).where(SprintScopeReview.session_id == session_id))
+    if scope_review:
+        selected_story_ids = set(json.loads(scope_review.selected_story_ids_json))
+        stories = [item for item in stories if item.stable_id in selected_story_ids]
     sprints = (await db.execute(select(Sprint).where(Sprint.project_id == project_id).order_by(Sprint.start_date))).scalars().all()
     assignments = (await db.execute(select(AssignmentRecommendation).where(AssignmentRecommendation.session_id == session_id))).scalars().all()
     members = (await db.execute(select(TeamMember).where(TeamMember.project_id == project_id))).scalars().all()
     dependencies = (await db.execute(select(Dependency).where(Dependency.session_id == session_id))).scalars().all()
+    committed_items = (await db.execute(
+        select(SprintItem).join(Sprint, Sprint.id == SprintItem.sprint_id).where(
+            Sprint.project_id == project_id, Sprint.committed.is_(True)
+        )
+    )).scalars().all()
     if not stories or not sprints or any(item.story_points is None for item in stories):
         raise ValueError("Estimated stories and verified sprints are required for sprint planning")
     sprint_external = {item.external_id or item.id: item for item in sprints}
+    sprint_external_by_id = {item.id: key for key, item in sprint_external.items()}
     member_external = {item.external_id or item.id: item for item in members}
     member_key_by_id = {item.id: key for key, item in member_external.items()}
     assignment_by_story = {
         item.item_stable_id: member_key_by_id.get(item.team_member_id)
         for item in assignments if item.item_stable_id.startswith("STORY-")
     }
+    committed_sprint_by_story = {
+        item.story_id: sprint_external_by_id[item.sprint_id]
+        for item in committed_items if item.sprint_id in sprint_external_by_id
+    }
     story_context = [{
         "stable_id": item.stable_id, "title": item.title, "story_points": item.story_points,
         "priority": item.priority, "recommended_assignee_id": assignment_by_story.get(item.stable_id),
+        "committed_sprint_id": committed_sprint_by_story.get(item.id),
     } for item in stories]
     sprint_context = [{
         "sprint_id": key, "name": item.name, "start_date": str(item.start_date),
         "end_date": str(item.end_date), "capacity_points": item.capacity_points,
         "already_committed_points": item.committed_points,
     } for key, item in sprint_external.items()]
+    scoped_story_ids = {item.stable_id for item in stories}
     dependency_context = [{
         "source": item.source_stable_id, "target": item.target_stable_id,
         "type": item.dependency_type, "risk": item.risk,
-    } for item in dependencies if item.source_stable_id.startswith("STORY-") and item.target_stable_id.startswith("STORY-")]
+    } for item in dependencies if item.source_stable_id in scoped_story_ids and item.target_stable_id in scoped_story_ids]
     shape = {"decisions": [{
         "story_stable_id": "STORY-001", "decision": "planned | deferred",
         "sprint_id": "SPR-001 or null", "assignee_id": "MEM-001 or null",
@@ -101,7 +118,12 @@ async def generate_sprint_plan(db: AsyncSession, project_id: str, session_id: st
             "dependencies": [item for item in dependency_context if item["source"] in local_ids],
             "prior_decisions": [item.model_dump(mode="json") for item in merged_decisions],
         }
-        prompt = "Create a sprint recommendation using this exact shape: " + compact_json(shape) + "\n\nDATA:\n" + compact_json(context)
+        prompt = (
+            "Create a sprint recommendation using this exact shape: " + compact_json(shape)
+            + "\nORDERING HEURISTIC: " + ORDERING_HEURISTIC
+            + "\nDo not move or re-sequence work in a committed sprint. Return it in its existing sprint or defer and request human review."
+            + "\n\nDATA:\n" + compact_json(context)
+        )
         prompts.append(prompt)
         validation_error = ""
         for _ in range(2):
@@ -136,6 +158,12 @@ async def generate_sprint_plan(db: AsyncSession, project_id: str, session_id: st
                         <= sprint_order[decision_by_story[dependency["source"]].sprint_id]
                     )
                     for dependency in dependency_context
+                )
+                and all(
+                    item.decision == "planned"
+                    and item.sprint_id == context_by_id[item.story_stable_id]["committed_sprint_id"]
+                    for item in batch.decisions
+                    if context_by_id[item.story_stable_id]["committed_sprint_id"] is not None
                 )
             )
             if valid:
@@ -197,3 +225,20 @@ async def sprint_plan_to_dicts(db: AsyncSession, records: list[SprintPlanDecisio
         "reason": item.reason, "confidence": item.confidence,
         "provenance": json.loads(item.provenance_json), "status": item.status,
     } for item in records]
+
+
+async def sprint_plan_forecast(
+    db: AsyncSession,
+    project_id: str,
+    session_id: str,
+    records: list[SprintPlanDecision],
+) -> tuple[object | None, int, float]:
+    stories = (await db.execute(select(UserStory).where(UserStory.session_id == session_id))).scalars().all()
+    sprints = (await db.execute(select(Sprint).where(Sprint.project_id == project_id))).scalars().all()
+    story_by_id = {item.id: item for item in stories}
+    sprint_by_id = {item.id: item for item in sprints}
+    planned = [item for item in records if item.decision == "planned" and item.sprint_id in sprint_by_id]
+    completion = max((sprint_by_id[item.sprint_id].end_date for item in planned), default=None)
+    planned_points = sum(story_by_id[item.story_id].story_points or 0 for item in planned)
+    available_capacity = sum(max(0, (item.capacity_points or 0) - item.committed_points) for item in sprints)
+    return completion, planned_points, available_capacity

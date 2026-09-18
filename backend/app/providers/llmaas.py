@@ -7,6 +7,7 @@ from openai import AsyncOpenAI
 
 from app.core.config import Settings
 from app.providers.base import LLMUsage
+from app.services.prompting import governed_system_prompt
 
 
 class LLMAASError(RuntimeError):
@@ -95,17 +96,19 @@ class LLMAASProvider:
         )
 
     async def generate_text(self, prompt: str, system_prompt: str | None = None) -> str:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+        messages = [{"role": "system", "content": governed_system_prompt(system_prompt)}]
         messages.append({"role": "user", "content": prompt})
         try:
             client = await self._client()
+            request_options = {
+                "model": self._settings.llm_model,
+                "messages": messages,
+                "response_format": {"type": "json_object"},
+            }
+            if not self._settings.llm_model.startswith("gpt-5"):
+                request_options["temperature"] = 0.0
             raw_response = await client.chat.completions.with_raw_response.create(
-                model=self._settings.llm_model,
-                messages=messages,
-                temperature=0.0,
-                response_format={"type": "json_object"},
+                **request_options,
             )
             response = raw_response.parse()
             self._record_usage(response.usage, raw_response.headers)

@@ -9,7 +9,7 @@ from app.exporters.excel import build_workbook, validate_workbook
 from app.models.entities import (
     AnalysisSession, AssignmentRecommendation, AuditEvent, BoardHealthResult, Clarification,
     ClarificationAnswer, ClarificationOption, Decomposition, Dependency, Document, DocumentSection,
-    DuplicateCandidate, Epic, Holiday, Leave, Project, QualityResult, Requirement, Sprint,
+    DuplicateCandidate, Epic, Feature, Holiday, Leave, Project, QualityResult, Requirement, Sprint,
     SprintPlanDecision, Task, TeamMember, UserStory, Department,
 )
 
@@ -39,9 +39,11 @@ async def publish_session_workbook(
     option_by_id = {item.id: item for item in options}
     decompositions = (await db.execute(select(Decomposition).where(Decomposition.session_id == session.id).order_by(Decomposition.stable_id))).scalars().all()
     epics = (await db.execute(select(Epic).where(Epic.session_id == session.id).order_by(Epic.stable_id))).scalars().all()
+    features = (await db.execute(select(Feature).where(Feature.session_id == session.id).order_by(Feature.stable_id))).scalars().all()
     stories = (await db.execute(select(UserStory).where(UserStory.session_id == session.id).order_by(UserStory.stable_id))).scalars().all()
     tasks = (await db.execute(select(Task).where(Task.session_id == session.id).order_by(Task.stable_id))).scalars().all()
     epic_by_id = {item.id: item for item in epics}
+    feature_by_id = {item.id: item for item in features}
     story_by_id = {item.id: item for item in stories}
     title_by_stable_id = {item.stable_id: item.title for item in [*epics, *stories, *tasks]}
     dependencies = (await db.execute(select(Dependency).where(Dependency.session_id == session.id))).scalars().all()
@@ -71,6 +73,7 @@ async def publish_session_workbook(
             {"Field": "Status", "Value": session.status},
             {"Field": "Requirements", "Value": len(requirements)},
             {"Field": "Epics", "Value": len(epics)},
+            {"Field": "Features", "Value": len(features)},
             {"Field": "Stories", "Value": len(stories)},
             {"Field": "Tasks", "Value": len(tasks)},
             {"Field": "Board Health", "Value": health.score if health else ""},
@@ -80,7 +83,7 @@ async def publish_session_workbook(
         "Requirements": [{"Requirement ID": item.stable_id, "Title": item.title, "Description": item.description, "Category": item.category, "Status": item.requirement_status, "Priority": item.priority, "Confidence": item.confidence, "Source Reference": _join(item.source_references_json)} for item in requirements],
         "Clarifications": [],
         "Decompositions": [{"Decomposition ID": item.stable_id, "Requirement IDs": _join(item.requirement_ids_json), "Capability": item.parent_capability, "Component Type": item.component_type, "Title": item.title, "Description": item.description, "Suggested Level": item.suggested_backlog_level, "Confidence": item.confidence} for item in decompositions],
-        "Epics": [{"Epic ID": item.stable_id, "Epic Title": item.title, "Description": item.description, "Business Value": item.business_value, "Priority": item.priority, "Acceptance Criteria": _join(item.acceptance_criteria), "Source Reference": _join(item.source_references_json), "Quality Score": quality_by_item[item.stable_id].score if item.stable_id in quality_by_item else ""} for item in epics],
+        "Epics": [{"Epic ID": item.stable_id, "Architecture Layer": item.architecture_layer, "Epic Title": item.title, "Description": item.description, "Business Value": item.business_value, "Priority": item.priority, "Acceptance Criteria": _join(item.acceptance_criteria), "Source Reference": _join(item.source_references_json), "Quality Score": quality_by_item[item.stable_id].score if item.stable_id in quality_by_item else ""} for item in epics],
         "User Stories": [], "Tasks": [],
         "Dependencies": [{"Source ID": item.source_stable_id, "Source Title": title_by_stable_id.get(item.source_stable_id, ""), "Target ID": item.target_stable_id, "Target Title": title_by_stable_id.get(item.target_stable_id, ""), "Dependency Type": item.dependency_type, "Risk": item.risk, "Explanation": item.explanation} for item in dependencies],
         "Quality Report": [],
@@ -109,11 +112,12 @@ async def publish_session_workbook(
     )
     planned_sprint_ids = set()
     for item in ordered_stories:
+        feature = feature_by_id.get(item.feature_id)
         assignment = assignment_by_item.get(item.stable_id)
         plan = plan_by_story_id.get(item.id)
         if plan and plan.sprint_id:
             planned_sprint_ids.add(plan.sprint_id)
-        rows["User Stories"].append({"Story ID": item.stable_id, "Epic ID": epic_by_id[item.epic_id].stable_id, "Story Title": item.title, "User Story": item.user_story, "Description": item.description, "Acceptance Criteria": _join(item.acceptance_criteria), "Priority": item.priority, "Story Points": item.story_points or "", "Dependencies": _join([edge.target_stable_id for edge in dependencies if edge.source_stable_id == item.stable_id]), "Suggested Assignee": member_by_id[assignment.team_member_id].name if assignment else "", "Department": department_by_id[member_by_id[assignment.team_member_id].department_id].name if assignment and member_by_id[assignment.team_member_id].department_id in department_by_id else "", "Sprint": sprint_by_id[plan.sprint_id].name if plan and plan.sprint_id else "Deferred", "Status": item.status, "Quality Score": quality_by_item[item.stable_id].score if item.stable_id in quality_by_item else "", "Source Reference": _join(item.source_references_json)})
+        rows["User Stories"].append({"Story ID": item.stable_id, "Feature ID": feature.stable_id if feature else "Legacy / unspecified", "Feature Title": feature.title if feature else "Legacy / unspecified", "Epic ID": epic_by_id[item.epic_id].stable_id, "Story Title": item.title, "User Story": item.user_story, "Description": item.description, "Acceptance Criteria": _join(item.acceptance_criteria), "Definition of Done": _join(item.definition_of_done_json), "Priority": item.priority, "Story Points": item.story_points or "", "Dependencies": _join([edge.target_stable_id for edge in dependencies if edge.source_stable_id == item.stable_id]), "Suggested Assignee": member_by_id[assignment.team_member_id].name if assignment else "", "Department": department_by_id[member_by_id[assignment.team_member_id].department_id].name if assignment and member_by_id[assignment.team_member_id].department_id in department_by_id else "", "Sprint": sprint_by_id[plan.sprint_id].name if plan and plan.sprint_id else "Deferred", "Status": item.status, "Quality Score": quality_by_item[item.stable_id].score if item.stable_id in quality_by_item else "", "Source Reference": _join(item.source_references_json)})
         rows["Sprint Plan"].append({"Sprint": sprint_by_id[plan.sprint_id].name if plan and plan.sprint_id else "Deferred", "Story ID": item.stable_id, "Story Title": item.title, "Story Points": item.story_points or "", "Suggested Assignee": member_by_id[plan.assignee_id].name if plan and plan.assignee_id else "", "Available Capacity": member_by_id[plan.assignee_id].capacity_hours if plan and plan.assignee_id else "", "Dependencies": _join([edge.target_stable_id for edge in dependencies if edge.source_stable_id == item.stable_id]), "Priority": item.priority, "Reason for Selection": plan.reason if plan else ""})
     for sprint in sprints:
         if sprint.id not in planned_sprint_ids:
@@ -123,9 +127,10 @@ async def publish_session_workbook(
             })
     for item in tasks:
         story = story_by_id[item.story_id]
+        feature = feature_by_id.get(story.feature_id)
         assignment = assignment_by_item.get(item.stable_id)
         plan = plan_by_story_id.get(story.id)
-        rows["Tasks"].append({"Task ID": item.stable_id, "Story ID": story.stable_id, "Epic ID": epic_by_id[story.epic_id].stable_id, "Task Title": item.title, "Description": item.description, "Task Type": item.task_type, "Priority": item.priority, "Estimated Hours": item.estimated_hours or "", "Dependencies": _join([edge.target_stable_id for edge in dependencies if edge.source_stable_id == item.stable_id]), "Suggested Assignee": member_by_id[assignment.team_member_id].name if assignment else "", "Department": department_by_id[member_by_id[assignment.team_member_id].department_id].name if assignment and member_by_id[assignment.team_member_id].department_id in department_by_id else "", "Sprint": sprint_by_id[plan.sprint_id].name if plan and plan.sprint_id else "Deferred", "Status": item.status})
+        rows["Tasks"].append({"Task ID": item.stable_id, "Story ID": story.stable_id, "Feature ID": feature.stable_id if feature else "Legacy / unspecified", "Epic ID": epic_by_id[story.epic_id].stable_id, "Task Title": item.title, "Description": item.description, "Task Type": item.task_type, "Work Category": item.work_category, "Acceptance Criteria": _join(item.acceptance_criteria_json), "Definition of Done": _join(item.definition_of_done_json), "Priority": item.priority, "Estimated Hours": item.estimated_hours or "", "Dependencies": _join([edge.target_stable_id for edge in dependencies if edge.source_stable_id == item.stable_id]), "Suggested Assignee": member_by_id[assignment.team_member_id].name if assignment else "", "Department": department_by_id[member_by_id[assignment.team_member_id].department_id].name if assignment and member_by_id[assignment.team_member_id].department_id in department_by_id else "", "Sprint": sprint_by_id[plan.sprint_id].name if plan and plan.sprint_id else "Deferred", "Status": item.status, "Source Reference": _join(item.source_references_json)})
     rows["Assignments"] = [{"Item ID": item.item_stable_id, "Member ID": member_by_id[item.team_member_id].external_id or item.team_member_id, "Member Name": member_by_id[item.team_member_id].name, "Role": member_by_id[item.team_member_id].role, "Department": department_by_id[member_by_id[item.team_member_id].department_id].name if member_by_id[item.team_member_id].department_id in department_by_id else "", "Recommended Hours": item.recommended_hours or "", "Match Score": item.match_score, "Reason": item.reason, "Status": item.status} for item in assignments]
     quality_rows = []
     dependency_issue_ids = {

@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 
@@ -87,21 +88,31 @@ class FakeProvider:
                     "epic_key": "E1", "decomposition_ids": ["DEC-001"],
                     "title": "Identity and access management",
                     "description": "Provide secure access to protected project capabilities.",
+                    "architecture_layer": "Security and identity",
                     "business_value": "Protects project data while enabling authorized work.",
                     "confidence": 0.9,
                 }],
+                "features": [{
+                    "feature_key": "F1", "parent_epic_key": "E1", "decomposition_ids": ["DEC-001"],
+                    "title": "OIDC authentication", "description": "Provide standards-based user authentication.",
+                    "business_value": "Enables secure, governed access to the product.", "confidence": 0.91,
+                }],
                 "stories": [{
-                    "story_key": "S1", "parent_epic_key": "E1", "decomposition_ids": ["DEC-001"],
+                    "story_key": "S1", "parent_feature_key": "F1", "decomposition_ids": ["DEC-001"],
                     "title": "Authenticate with OIDC",
                     "user_story": "As a user, I want to authenticate with OIDC so that I can access the platform securely.",
                     "description": "Authenticate platform users through the approved OIDC identity provider.",
+                    "definition_of_done": ["Authentication tests pass and security evidence is retained."],
                     "confidence": 0.92,
                 }],
                 "tasks": [{
                     "task_key": "T1", "parent_story_key": "S1", "decomposition_ids": ["DEC-001"],
                     "title": "Integrate OIDC provider",
                     "description": "Configure and implement the approved OIDC authentication integration.",
-                    "task_type": "implementation", "confidence": 0.88,
+                    "task_type": "implementation", "work_category": "security",
+                    "acceptance_criteria": ["Valid OIDC identities can complete authentication."],
+                    "definition_of_done": ["Integration, automated tests, and security review are complete."],
+                    "confidence": 0.88,
                 }],
             })
         if system_prompt and "Decomposition Agent" in system_prompt:
@@ -202,6 +213,12 @@ async def test_clarification_session_interrupts_and_resumes(client):
     created = await client.post(f"/api/v1/projects/{project['id']}/sessions")
     assert created.status_code == 201
     session = created.json()
+    assert session["status"] == "processing_requirements"
+    for _ in range(100):
+        session = (await client.get(f"/api/v1/sessions/{session['id']}")).json()
+        if session["status"] not in {"processing_requirements", "processing_clarifications"}:
+            break
+        await asyncio.sleep(0.01)
     assert session["status"] == "awaiting_clarification"
     assert len(session["thread_id"]) == 36
 
@@ -286,13 +303,17 @@ async def test_clarification_session_interrupts_and_resumes(client):
     backlog = backlog_response.json()
     assert backlog["session_status"] == "backlog_complete"
     assert backlog["epics"][0]["stable_id"] == "EPIC-001"
+    assert backlog["features"][0]["stable_id"] == "FEATURE-001"
     assert backlog["stories"][0]["stable_id"] == "STORY-001"
     assert backlog["stories"][0]["epic_stable_id"] == "EPIC-001"
+    assert backlog["stories"][0]["feature_stable_id"] == "FEATURE-001"
     assert backlog["tasks"][0]["stable_id"] == "TASK-001"
     assert backlog["tasks"][0]["story_stable_id"] == "STORY-001"
     assert backlog["tasks"][0]["requirement_ids"] == ["REQ-001"]
     assert backlog["tasks"][0]["decomposition_ids"] == ["DEC-001"]
     assert backlog["tasks"][0]["estimated_hours"] is None
+    assert backlog["tasks"][0]["work_category"] == "security"
+    assert backlog["tasks"][0]["source_references"] == ["requirements.xlsx | Requirements"]
     assert backlog["tasks"][0]["provenance"]["title"]["requires_review"] is True
 
     enriched_response = await client.post(f"/api/v1/sessions/{session['id']}/enrich")
@@ -323,6 +344,22 @@ async def test_clarification_session_interrupts_and_resumes(client):
     dependencies = dependencies_response.json()
     assert dependencies["session_status"] == "dependencies_complete"
     assert dependencies["dependencies"] == []
+
+    dependency_order = await client.get(f"/api/v1/sessions/{session['id']}/dependency-order")
+    assert dependency_order.status_code == 200
+    assert dependency_order.json()["brief"] is None
+    assert dependency_order.json()["epics"][0]["stable_id"] == "EPIC-001"
+    assert dependency_order.json()["parallel_groups"] == [["EPIC-001"]]
+    saved_order = await client.put(
+        f"/api/v1/sessions/{session['id']}/dependency-order",
+        json={
+            "answered_by": "Product Owner",
+            "ranked_epic_ids": ["EPIC-001"],
+            "priority_rationale": "Authentication is the required foundation for all protected product capabilities.",
+        },
+    )
+    assert saved_order.status_code == 200
+    assert saved_order.json()["ranked_epic_ids"] == ["EPIC-001"]
 
     planning_workbook = Workbook()
     planning_workbook.active.title = "Teams"
@@ -357,6 +394,20 @@ async def test_clarification_session_interrupts_and_resumes(client):
     assert assignment["assignments"][1]["team_member_name"] == "Asha"
     assert assignment["assignments"][1]["recommended_hours"] == 12
     assert assignment["assignments"][1]["status"] == "proposed"
+
+    missing_scope = await client.post(f"/api/v1/sessions/{session['id']}/plan-sprints")
+    assert missing_scope.status_code == 409
+    scope = await client.get(f"/api/v1/sessions/{session['id']}/sprint-scope-review")
+    assert scope.status_code == 200
+    assert scope.json()["reviewed"] is False
+    assert scope.json()["selected_task_ids"] == ["TASK-001"]
+    reviewed_scope = await client.put(
+        f"/api/v1/sessions/{session['id']}/sprint-scope-review",
+        json={"reviewed_by": "Product Owner", "selected_task_ids": ["TASK-001"], "note": "Approved MVP scope."},
+    )
+    assert reviewed_scope.status_code == 200
+    assert reviewed_scope.json()["reviewed"] is True
+    assert reviewed_scope.json()["selected_story_ids"] == ["STORY-001"]
 
     sprint_response = await client.post(f"/api/v1/sessions/{session['id']}/plan-sprints")
     assert sprint_response.status_code == 200
@@ -409,9 +460,28 @@ async def test_clarification_session_interrupts_and_resumes(client):
         "Item ID", "Item Type", "Quality Score", "Missing Acceptance Criteria", "Duplicate",
         "Ambiguous", "Dependency Issue", "Estimation Issue", "Recommendation",
     )
-    story_rows = list(exported["User Stories"].iter_rows(min_row=2, values_only=True))
+    story_sheet = exported["User Stories"]
+    story_headers = [cell.value for cell in story_sheet[1]]
+    story_rows = list(story_sheet.iter_rows(min_row=2, values_only=True))
+    task_sheet = exported["Tasks"]
+    task_headers = [cell.value for cell in task_sheet[1]]
+    task_rows = list(task_sheet.iter_rows(min_row=2, values_only=True))
     sprint_rows = list(exported["Sprint Plan"].iter_rows(min_row=2, values_only=True))
-    assert story_rows and all(row[0] and row[11] and row[14] for row in story_rows)
+    assert story_rows and all(
+        row[story_headers.index("Story ID")]
+        and row[story_headers.index("Feature ID")]
+        and row[story_headers.index("Sprint")]
+        and row[story_headers.index("Source Reference")]
+        and row[story_headers.index("Definition of Done")]
+        for row in story_rows
+    )
+    assert task_rows and all(
+        row[task_headers.index("Work Category")]
+        and row[task_headers.index("Acceptance Criteria")]
+        and row[task_headers.index("Definition of Done")]
+        and row[task_headers.index("Source Reference")]
+        for row in task_rows
+    )
     story_sprint_rows = [row for row in sprint_rows if row[1]]
     empty_sprint_rows = [row for row in sprint_rows if not row[1]]
     assert story_sprint_rows and all(row[0] and row[1] and row[8] for row in story_sprint_rows)

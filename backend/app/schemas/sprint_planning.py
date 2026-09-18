@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -46,3 +47,44 @@ class SprintPlanningResult(BaseModel):
     session_id: str
     session_status: str
     decisions: list[SprintDecisionRead]
+    ordering_heuristic: str
+    forecast_completion_date: date | None
+    total_planned_points: int
+    total_available_capacity_points: float
+
+
+class SprintScopeReviewCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reviewed_by: str = Field(min_length=2, max_length=200)
+    selected_task_ids: list[str] = Field(min_length=1, max_length=300)
+    note: str = Field(default="", max_length=4000)
+
+
+class SprintScopeTaskRead(BaseModel):
+    stable_id: str
+    story_stable_id: str
+    title: str
+    work_category: str
+    estimated_hours: float | None
+    selected: bool
+
+
+class SprintScopeStoryRead(BaseModel):
+    stable_id: str
+    title: str
+    story_points: int
+    priority: str
+    selected: bool
+    tasks: list[SprintScopeTaskRead]
+
+
+class SprintScopeReviewRead(BaseModel):
+    id: str | None
+    session_id: str
+    reviewed_by: str
+    selected_task_ids: list[str]
+    discarded_task_ids: list[str]
+    selected_story_ids: list[str]
+    note: str
+    reviewed: bool
+    stories: list[SprintScopeStoryRead]

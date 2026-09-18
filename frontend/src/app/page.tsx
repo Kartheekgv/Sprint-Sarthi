@@ -5,7 +5,12 @@ import {
   ArrowRight,
   Bot,
   CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
   Coins,
+  Download,
   Eye,
   EyeOff,
   FileText,
@@ -18,6 +23,7 @@ import {
   Loader2,
   Plus,
   ShieldCheck,
+  Trash2,
   Upload,
   UserRound,
   X,
@@ -49,7 +55,7 @@ type AnalysisJob = {
   progress: number;
   error: string | null;
 };
-type AnalysisSession = { id: string; thread_id: string; status: string };
+type AnalysisSession = { id: string; thread_id: string; status: string; current_node?: string | null };
 type DocumentChunk = {
   id: string;
   chunk_id: string;
@@ -137,19 +143,31 @@ type BacklogEpic = {
   stable_id: string;
   title: string;
   description: string;
+  architecture_layer: string;
   business_value: string;
   priority: string;
   acceptance_criteria?: string[];
+  source_references: string[];
+};
+type BacklogFeature = {
+  id: string;
+  stable_id: string;
+  epic_stable_id: string;
+  title: string;
+  description: string;
+  business_value: string;
   source_references: string[];
 };
 type BacklogStory = {
   id: string;
   stable_id: string;
   epic_stable_id: string;
+  feature_stable_id: string;
   title: string;
   user_story: string;
   priority: string;
   acceptance_criteria: string[];
+  definition_of_done: string[];
   story_points: number | null;
   estimation_rationale: string;
   source_references: string[];
@@ -161,15 +179,49 @@ type BacklogTask = {
   title: string;
   description: string;
   task_type: string;
+  work_category: string;
+  acceptance_criteria: string[];
+  definition_of_done: string[];
   estimated_hours: number | null;
   estimation_rationale: string;
   source_references: string[];
 };
 type Backlog = {
   epics: BacklogEpic[];
+  features: BacklogFeature[];
   stories: BacklogStory[];
   tasks: BacklogTask[];
 };
+type QualityClarification = {
+  id: string;
+  item_id: string;
+  item_type: "epic" | "feature" | "story" | "task";
+  missing_fields: string[];
+  question: string;
+  status: string;
+};
+type NewStoryCheck = {
+  id: string;
+  classification: "duplicate" | "new" | "clarification";
+  equivalent_story_id: string | null;
+  suggested_feature_id: string | null;
+  suggested_sprint_id: string | null;
+  rationale: string;
+  clarifying_questions: string[];
+  confidence: number;
+  status: string;
+};
+type EstimationBrief = {
+  id?: string;
+  session_id?: string;
+  answered_by: string;
+  ranked_epic_ids: string[];
+  priority_rationale: string;
+  created_at?: string;
+  updated_at?: string;
+};
+type EstimationEpicOption = { stable_id: string; title: string; business_value: string; architecture_layer: string; current_priority: string };
+type EstimationBriefWorkspace = { brief: EstimationBrief | null; epics: EstimationEpicOption[]; parallel_groups: string[][]; parallelism_note: string };
 type BacklogDependency = {
   id: string;
   source_stable_id: string;
@@ -178,6 +230,12 @@ type BacklogDependency = {
   risk: string;
   explanation: string;
   confidence: number;
+};
+
+const emptyEstimationBrief: EstimationBrief = {
+  answered_by: "",
+  ranked_epic_ids: [],
+  priority_rationale: "",
 };
 type PlanningIssue = {
   sheet: string;
@@ -208,6 +266,32 @@ type SprintDecision = {
   assignee_name: string | null;
   reason: string;
   status: string;
+};
+type SprintScopeTask = {
+  stable_id: string;
+  story_stable_id: string;
+  title: string;
+  work_category: string;
+  estimated_hours: number | null;
+  selected: boolean;
+};
+type SprintScopeStory = {
+  stable_id: string;
+  title: string;
+  story_points: number;
+  priority: string;
+  selected: boolean;
+  tasks: SprintScopeTask[];
+};
+type SprintScopeReview = {
+  id: string | null;
+  reviewed_by: string;
+  selected_task_ids: string[];
+  discarded_task_ids: string[];
+  selected_story_ids: string[];
+  note: string;
+  reviewed: boolean;
+  stories: SprintScopeStory[];
 };
 type DuplicateCandidate = {
   id: string;
@@ -363,9 +447,11 @@ export default function Home() {
   const [loginError, setLoginError] = useState("");
   const [selectedStage, setSelectedStage] = useState(initialSnapshot.selectedStage ?? -1);
   const [selectedAgent, setSelectedAgent] = useState(initialSnapshot.selectedAgent ?? -1);
+  const [transitionDirection, setTransitionDirection] = useState<"forward" | "backward">("forward");
   const [homeOpen, setHomeOpen] = useState(!initialSnapshot.project);
   const [projectHistory, setProjectHistory] = useState<Project[]>([]);
   const [historyProject, setHistoryProject] = useState<Project | null>(null);
+  const [deleteProjectArmed, setDeleteProjectArmed] = useState(false);
   const [historyDocuments, setHistoryDocuments] = useState<Document[]>([]);
   const [project, setProject] = useState<Project | null>(initialSnapshot.project ?? null);
   const [document, setDocument] = useState<Document | null>(initialSnapshot.document ?? null);
@@ -385,17 +471,29 @@ export default function Home() {
   const [clarificationsComplete, setClarificationsComplete] = useState(initialSnapshot.clarificationsComplete ?? false);
   const [requirements, setRequirements] = useState<Requirement[]>(initialSnapshot.requirements ?? []);
   const [decompositions, setDecompositions] = useState<Decomposition[]>(initialSnapshot.decompositions ?? []);
-  const [backlog, setBacklog] = useState<Backlog | null>(initialSnapshot.backlog ?? null);
+  const [backlog, setBacklog] = useState<Backlog | null>(initialSnapshot.backlog ? { ...initialSnapshot.backlog, features: initialSnapshot.backlog.features ?? [] } : null);
   const [enriched, setEnriched] = useState(initialSnapshot.enriched ?? false);
   const [estimated, setEstimated] = useState(initialSnapshot.estimated ?? false);
+  const [estimationBrief, setEstimationBrief] = useState<EstimationBrief | null>(null);
+  const [estimationOptions, setEstimationOptions] = useState<Omit<EstimationBriefWorkspace, "brief">>({ epics: [], parallel_groups: [], parallelism_note: "" });
+  const [estimationDraft, setEstimationDraft] = useState<EstimationBrief>(emptyEstimationBrief);
+  const [estimationBriefBusy, setEstimationBriefBusy] = useState(false);
   const [dependencies, setDependencies] = useState<BacklogDependency[] | null>(initialSnapshot.dependencies ?? null);
   const [planningReady, setPlanningReady] = useState(initialSnapshot.planningReady ?? false);
   const [planningIssues, setPlanningIssues] = useState<PlanningIssue[]>(initialSnapshot.planningIssues ?? []);
   const [assignments, setAssignments] = useState<Assignment[]>(initialSnapshot.assignments ?? []);
   const [sprintPlan, setSprintPlan] = useState<SprintDecision[]>(initialSnapshot.sprintPlan ?? []);
+  const [sprintScope, setSprintScope] = useState<SprintScopeReview | null>(null);
+  const [sprintScopeTaskIds, setSprintScopeTaskIds] = useState<string[]>([]);
+  const [sprintScopeReviewer, setSprintScopeReviewer] = useState("");
+  const [sprintScopeNote, setSprintScopeNote] = useState("");
   const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidate[]>(initialSnapshot.duplicateCandidates ?? []);
   const [duplicatesComplete, setDuplicatesComplete] = useState(initialSnapshot.duplicatesComplete ?? false);
   const [qualityResults, setQualityResults] = useState<QualityResult[]>(initialSnapshot.qualityResults ?? []);
+  const [qualityClarifications, setQualityClarifications] = useState<QualityClarification[]>([]);
+  const [qualityAnswerDrafts, setQualityAnswerDrafts] = useState<Record<string, Record<string, string>>>({});
+  const [newStoryDraft, setNewStoryDraft] = useState({ title: "", user_story: "", description: "", priority: "Medium", story_points: "5", acceptance_criteria: "", definition_of_done: "", source_references: "" });
+  const [newStoryCheck, setNewStoryCheck] = useState<NewStoryCheck | null>(null);
   const [boardHealth, setBoardHealth] = useState<BoardHealth | null>(initialSnapshot.boardHealth ?? null);
   const [approved, setApproved] = useState(initialSnapshot.approved ?? false);
   const [reviewer, setReviewer] = useState(initialSnapshot.reviewer ?? "");
@@ -426,12 +524,13 @@ export default function Home() {
     : Math.min(selectedStage, unlockedStage);
   const unlockedAgent = publishedExport || approved ? 16
     : boardHealth ? 15
-      : qualityResults.length > 0 ? 14
+      : qualityClarifications.some((item) => item.status === "pending") ? 13
+        : qualityResults.length > 0 ? 14
         : duplicatesComplete ? 13
         : sprintPlan.length > 0 ? 12
           : assignments.length > 0 ? 11
             : planningReady ? 10
-              : dependencies !== null ? 9
+              : dependencies !== null && estimationBrief ? 9
                 : estimated ? 8
                   : enriched ? 7
                     : backlog ? 6
@@ -493,6 +592,63 @@ export default function Home() {
     if (!session) {
       return;
     }
+    if (assignments.length === 0 && sprintPlan.length === 0) {
+      return;
+    }
+    fetch(`${API_URL}/sessions/${session.id}/sprint-scope-review`)
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load Sprint scope review.");
+        return response.json();
+      })
+      .then((review: SprintScopeReview) => {
+        setSprintScope(review);
+        setSprintScopeTaskIds(review.selected_task_ids);
+        setSprintScopeReviewer(review.reviewed_by);
+        setSprintScopeNote(review.note);
+      })
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load Sprint scope review."));
+  }, [session, assignments, sprintPlan]);
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+    fetch(`${API_URL}/sessions/${session.id}/quality-clarifications`)
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load quality clarifications.");
+        return response.json();
+      })
+      .then((items: QualityClarification[]) => setQualityClarifications(items))
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load quality clarifications."));
+  }, [session, qualityResults]);
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+    fetch(`${API_URL}/sessions/${session.id}/dependency-order`)
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load Dependency Epic ordering.");
+        return response.json();
+      })
+      .then((workspace: EstimationBriefWorkspace) => {
+        setEstimationBrief(workspace.brief);
+        setEstimationOptions({ epics: workspace.epics, parallel_groups: workspace.parallel_groups, parallelism_note: workspace.parallelism_note });
+        setEstimationDraft(workspace.brief ?? {
+          ...emptyEstimationBrief,
+          ranked_epic_ids: workspace.epics.map((item) => item.stable_id),
+        });
+      })
+      .catch((cause) => {
+        setEstimationBrief(null);
+          setError(cause instanceof Error ? cause.message : "Could not load Dependency Epic ordering.");
+      });
+        }, [session, dependencies]);
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
     fetch(`${API_URL}/sessions/${session.id}/clarifications`)
       .then((response) => {
         if (!response.ok) throw new Error("Could not load clarification history.");
@@ -521,22 +677,10 @@ export default function Home() {
       });
   }, [session, currentAgent.label]);
 
-  function navigateToStage(index: number) {
-    if (index > unlockedStage) return;
-    setSelectedStage(index);
-    window.requestAnimationFrame(() => {
-      const target = window.document.getElementById(`workflow-content-${index}`)
-        ?? window.document.getElementById(`workflow-stage-${index}`);
-      target?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    });
-  }
-
   function navigateToAgent(index: number) {
-    if (index > unlockedAgent) return;
+    if (index > unlockedAgent || index === visibleAgent) return;
     const agent = agentStages[index];
+    setTransitionDirection(index > visibleAgent ? "forward" : "backward");
     setSelectedAgent(index);
     setSelectedStage(agent.section);
     setHomeOpen(false);
@@ -554,6 +698,7 @@ export default function Home() {
       const response = await fetch(`${API_URL}/projects/${item.id}/documents`);
       if (!response.ok) throw new Error("Could not load project architectures.");
       setHistoryProject(item);
+      setDeleteProjectArmed(false);
       setHistoryDocuments(await response.json());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unexpected error");
@@ -627,7 +772,7 @@ export default function Home() {
       setClarificationsComplete(resumed.clarifications_complete);
       setRequirements(resumed.requirements);
       setDecompositions(resumed.decompositions);
-      setBacklog(resumed.backlog);
+      setBacklog(resumed.backlog ? { ...resumed.backlog, features: resumed.backlog.features ?? [] } : null);
       setEnriched(resumed.enriched);
       setEstimated(resumed.estimated);
       setDependencies(resumed.dependencies);
@@ -649,6 +794,32 @@ export default function Home() {
       setSelectedStage(agentStages[resumed.agent_index]?.section ?? 0);
       setHistoryProject(null);
       setHomeOpen(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unexpected error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteHistoryProject() {
+    if (!historyProject) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/projects/${historyProject.id}`, { method: "DELETE" });
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? "Could not delete the project.");
+      }
+      const deletedId = historyProject.id;
+      setProjectHistory((items) => items.filter((item) => item.id !== deletedId));
+      setHistoryProject(null);
+      setHistoryDocuments([]);
+      setDeleteProjectArmed(false);
+      if (project?.id === deletedId) {
+        startNewProject();
+        setHomeOpen(true);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unexpected error");
     } finally {
@@ -798,6 +969,19 @@ export default function Home() {
     if (response.ok) setLlmUsage(await response.json());
   }
 
+  async function waitForSessionPreparation(sessionId: string): Promise<AnalysisSession> {
+    for (let attempt = 0; attempt < 450; attempt += 1) {
+      const response = await fetch(`${API_URL}/sessions/${sessionId}`);
+      if (!response.ok) throw new Error("Could not check analysis preparation status.");
+      const current = await response.json() as AnalysisSession;
+      setSession(current);
+      if (current.status === "failed") throw new Error("Requirement or clarification preparation failed. Review the global error and retry.");
+      if (!current.status.startsWith("processing_")) return current;
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    }
+    throw new Error("Preparation is still running after 15 minutes. You can safely resume this project from History.");
+  }
+
   async function startClarification() {
     if (!project) return;
     setBusy(true);
@@ -815,7 +999,13 @@ export default function Home() {
       setSession(created);
       setSelectedStage(1);
       setSelectedAgent(2);
-      await loadNextClarification(created.id);
+      const prepared = created.status.startsWith("processing_")
+        ? await waitForSessionPreparation(created.id)
+        : created;
+      if (prepared.status !== "awaiting_clarification" && prepared.status !== "clarifications_complete") {
+        throw new Error(`Unexpected preparation status: ${prepared.status}.`);
+      }
+      if (prepared.status === "awaiting_clarification") await loadNextClarification(created.id);
       await loadLlmUsage(created.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unexpected error");
@@ -987,6 +1177,56 @@ export default function Home() {
     }
   }
 
+  async function saveEstimationBrief(event: FormEvent) {
+    event.preventDefault();
+    if (!session) return;
+    if (!estimationDraft.answered_by.trim()) {
+      setError("Enter the decision owner before saving the Epic order.");
+      return;
+    }
+    if (estimationDraft.ranked_epic_ids.length !== estimationOptions.epics.length) {
+      setError("Rank every generated Epic before continuing to planning.");
+      return;
+    }
+    if (!estimationDraft.priority_rationale.trim()) {
+      setError("Explain the Product Owner prioritization rationale.");
+      return;
+    }
+    setEstimationBriefBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/sessions/${session.id}/dependency-order`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...estimationDraft,
+          answered_by: estimationDraft.answered_by.trim(),
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? "Could not save the Dependency Epic order.");
+      }
+      const saved = await response.json() as EstimationBrief;
+      setEstimationBrief(saved);
+      setEstimationDraft(saved);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save the Dependency Epic order.");
+    } finally {
+      setEstimationBriefBusy(false);
+    }
+  }
+
+  function moveRankedEpic(index: number, direction: -1 | 1) {
+    setEstimationDraft((current) => {
+      const target = index + direction;
+      if (target < 0 || target >= current.ranked_epic_ids.length) return current;
+      const ranked = [...current.ranked_epic_ids];
+      [ranked[index], ranked[target]] = [ranked[target], ranked[index]];
+      return { ...current, ranked_epic_ids: ranked };
+    });
+  }
+
   async function runDependencies() {
     if (!session) return;
     setBusy(true);
@@ -1001,7 +1241,8 @@ export default function Home() {
       }
       const result: { dependencies: BacklogDependency[] } = await response.json();
       setDependencies(result.dependencies);
-      setSelectedAgent(9);
+      setEstimationBrief(null);
+      setSelectedAgent(8);
       await loadLlmUsage(session.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unexpected error");
@@ -1029,10 +1270,28 @@ export default function Home() {
       const result: { requires_clarification: boolean; issues: PlanningIssue[] } = await response.json();
       setPlanningIssues(result.issues);
       setPlanningReady(!result.requires_clarification);
-      if (!result.requires_clarification) {
+      if (result.requires_clarification) {
+        const blockingIssues = result.issues
+          .filter((issue) => issue.blocking)
+          .map((issue) => `${issue.sheet}${issue.row ? ` row ${issue.row}` : ""}: ${issue.message}`);
+        setSession((current) => current ? { ...current, status: "dependencies_complete", current_node: "Planning Data" } : current);
+        setSelectedStage(4);
+        setSelectedAgent(9);
+        setError(`Planning data was checked but not imported. Fix these blocking issues: ${blockingIssues.join(" ")}`);
+      } else {
+        setSession((current) => current ? { ...current, status: "planning_data_ready", current_node: "Assignment" } : current);
+        setAssignments([]);
+        setSprintPlan([]);
+        setSprintScope(null);
+        setDuplicateCandidates([]);
+        setDuplicatesComplete(false);
+        setQualityResults([]);
+        setQualityClarifications([]);
+        setBoardHealth(null);
+        setApproved(false);
+        setPublishedExport(null);
         setSelectedStage(4);
         setSelectedAgent(10);
-        await continuePlanningWorkflow(session.id);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unexpected error");
@@ -1047,9 +1306,31 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      await continuePlanningWorkflow(session.id);
+      const result = await postAgent<{ assignments: Assignment[] }>(session.id, "assign");
+      setAssignments(result.assignments);
+      await loadLlmUsage(session.id);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unexpected error");
+      const message = cause instanceof Error ? cause.message : "Unexpected error";
+      if (message.includes("Verified team capacity is insufficient")) {
+        setPlanningReady(false);
+        setAssignments([]);
+        setSprintPlan([]);
+        setSprintScope(null);
+        setDuplicateCandidates([]);
+        setDuplicatesComplete(false);
+        setQualityResults([]);
+        setQualityClarifications([]);
+        setBoardHealth(null);
+        setApproved(false);
+        setPublishedExport(null);
+        setPlanningIssues([{
+          sheet: "Planning Data", row: null, field: "capacity_hours",
+          message: "Available team capacity is below the estimated Task demand. Upload a revised planning workbook with additional capacity, members, allocation, or Sprints.",
+          blocking: true,
+        }]);
+        setSelectedAgent(9);
+      }
+      setError(message);
     } finally {
       setBusy(false);
     }
@@ -1064,25 +1345,167 @@ export default function Home() {
     return response.json();
   }
 
-  async function continuePlanningWorkflow(sessionId: string) {
-    const assignmentResult = await postAgent<{ assignments: Assignment[] }>(sessionId, "assign");
-    setAssignments(assignmentResult.assignments);
-    setSelectedAgent(11);
-    const sprintResult = await postAgent<{ decisions: SprintDecision[] }>(sessionId, "plan-sprints");
-    setSprintPlan(sprintResult.decisions);
-    setSelectedAgent(12);
-    const duplicateResult = await postAgent<{ candidates: DuplicateCandidate[] }>(sessionId, "duplicates");
-    setDuplicateCandidates(duplicateResult.candidates);
-    setDuplicatesComplete(true);
-    setSelectedAgent(13);
-    const qualityResult = await postAgent<{ results: QualityResult[] }>(sessionId, "quality");
-    setQualityResults(qualityResult.results);
-    setSelectedAgent(14);
-    const healthResult = await postAgent<{ health: BoardHealth }>(sessionId, "board-health");
-    setBoardHealth(healthResult.health);
-    setSelectedStage(5);
-    setSelectedAgent(15);
-    await loadLlmUsage(sessionId);
+  async function runSprintPlanning() {
+    if (!session) return;
+    if (!sprintScope?.reviewed) {
+      setError("Review and save the approved Task scope before planning Sprints.");
+      return;
+    }
+    setBusy(true); setError("");
+    try {
+      const result = await postAgent<{ decisions: SprintDecision[] }>(session.id, "plan-sprints");
+      setSprintPlan(result.decisions);
+      await loadLlmUsage(session.id);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unexpected error"); }
+    finally { setBusy(false); }
+  }
+
+  async function saveSprintScopeReview(event: FormEvent) {
+    event.preventDefault();
+    if (!session) return;
+    if (!sprintScopeReviewer.trim()) {
+      setError("Enter the scope reviewer name.");
+      return;
+    }
+    if (sprintScopeTaskIds.length === 0) {
+      setError("Select at least one Task for Sprint planning.");
+      return;
+    }
+    setBusy(true); setError("");
+    try {
+      const response = await fetch(`${API_URL}/sessions/${session.id}/sprint-scope-review`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewed_by: sprintScopeReviewer.trim(), selected_task_ids: sprintScopeTaskIds, note: sprintScopeNote.trim() }),
+      });
+      if (!response.ok) { const body = await response.json(); throw new Error(body.detail ?? "Could not save Sprint scope review."); }
+      const saved = await response.json() as SprintScopeReview;
+      setSprintScope(saved);
+      setSprintScopeTaskIds(saved.selected_task_ids);
+      setSprintPlan([]);
+      setDuplicateCandidates([]);
+      setDuplicatesComplete(false);
+      setQualityResults([]);
+      setQualityClarifications([]);
+      setBoardHealth(null);
+      setApproved(false);
+      setPublishedExport(null);
+      setSelectedAgent(11);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unexpected error"); }
+    finally { setBusy(false); }
+  }
+
+  async function runDuplicateDetection() {
+    if (!session) return;
+    setBusy(true); setError("");
+    try {
+      const result = await postAgent<{ candidates: DuplicateCandidate[] }>(session.id, "duplicates");
+      setDuplicateCandidates(result.candidates); setDuplicatesComplete(true);
+      await loadLlmUsage(session.id);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unexpected error"); }
+    finally { setBusy(false); }
+  }
+
+  async function runQualityValidation() {
+    if (!session) return;
+    setBusy(true); setError("");
+    try {
+      const result = await postAgent<{ results: QualityResult[]; clarifications: QualityClarification[] }>(session.id, "quality");
+      setQualityResults(result.results);
+      setQualityClarifications(result.clarifications);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unexpected error"); }
+    finally { setBusy(false); }
+  }
+
+  async function answerQualityClarification(item: QualityClarification) {
+    const draft = qualityAnswerDrafts[item.id] ?? {};
+    const listFields = new Set(["source_references", "acceptance_criteria", "definition_of_done"]);
+    const numericFields = new Set(["story_points", "estimated_hours"]);
+    const values = Object.fromEntries(item.missing_fields.map((check) => {
+      const field = check === "source_traceable" ? "source_references"
+        : check === "priority_set" ? "priority"
+          : check === "estimated" ? item.item_type === "story" ? "story_points" : "estimated_hours"
+            : check.replace(/_present$/, "");
+      const raw = draft[field] ?? "";
+      return [field, listFields.has(field) ? raw.split("\n").map((value) => value.trim()).filter(Boolean) : numericFields.has(field) ? Number(raw) : raw];
+    }));
+    setBusy(true); setError("");
+    try {
+      const response = await fetch(`${API_URL}/quality-clarifications/${item.id}/answer`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values }),
+      });
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail ?? "Could not record quality clarification.");
+      }
+      const answered = await response.json() as QualityClarification;
+      const updated = qualityClarifications.map((candidate) => candidate.id === answered.id ? answered : candidate);
+      setQualityClarifications(updated);
+      if (updated.every((candidate) => candidate.status === "answered")) setQualityResults([]);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unexpected error"); }
+    finally { setBusy(false); }
+  }
+
+  async function checkProposedStory(event: FormEvent) {
+    event.preventDefault();
+    if (!session) return;
+    setBusy(true); setError(""); setNewStoryCheck(null);
+    try {
+      const response = await fetch(`${API_URL}/sessions/${session.id}/new-story-check`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...newStoryDraft,
+          story_points: Number(newStoryDraft.story_points),
+          acceptance_criteria: newStoryDraft.acceptance_criteria.split("\n").map((value) => value.trim()).filter(Boolean),
+          definition_of_done: newStoryDraft.definition_of_done.split("\n").map((value) => value.trim()).filter(Boolean),
+          source_references: newStoryDraft.source_references.split("\n").map((value) => value.trim()).filter(Boolean),
+        }),
+      });
+      if (!response.ok) { const body = await response.json(); throw new Error(body.detail ?? "New-story check failed."); }
+      setNewStoryCheck(await response.json());
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unexpected error"); }
+    finally { setBusy(false); }
+  }
+
+  async function confirmNewStory() {
+    if (!session || !newStoryCheck || newStoryCheck.classification !== "new") return;
+    setBusy(true); setError("");
+    try {
+      const response = await fetch(`${API_URL}/sessions/${session.id}/stories`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ check_id: newStoryCheck.id, confirmed: true }),
+      });
+      if (!response.ok) { const body = await response.json(); throw new Error(body.detail ?? "Story creation failed."); }
+      setNewStoryCheck({ ...newStoryCheck, status: "created" });
+      if (project) {
+        const resumed = await fetch(`${API_URL}/projects/${project.id}/resume`).then((result) => result.json()) as WorkflowResume;
+        setBacklog(resumed.backlog ? { ...resumed.backlog, features: resumed.backlog.features ?? [] } : null);
+      }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unexpected error"); }
+    finally { setBusy(false); }
+  }
+
+  async function runBoardHealthAssessment() {
+    if (!session) return;
+    setBusy(true); setError("");
+    try {
+      const result = await postAgent<{ health: BoardHealth }>(session.id, "board-health");
+      setBoardHealth(result.health);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unexpected error"); }
+    finally { setBusy(false); }
+  }
+
+  async function runPublication() {
+    if (!session || !approved) return;
+    setBusy(true); setError("");
+    try {
+      const response = await fetch(`${API_URL}/sessions/${session.id}/publish`, { method: "POST" });
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.detail ?? "Workbook publication failed.");
+      }
+      setPublishedExport(await response.json());
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unexpected error"); }
+    finally { setBusy(false); }
   }
 
   async function submitApproval(decision: "approve" | "reject" | "request_changes") {
@@ -1104,14 +1527,6 @@ export default function Home() {
       }
       if (decision === "approve") {
         setApproved(true);
-        const publishResponse = await fetch(`${API_URL}/sessions/${session.id}/publish`, { method: "POST" });
-        if (!publishResponse.ok) {
-          const result = await publishResponse.json();
-          throw new Error(result.detail ?? "Workbook publication failed.");
-        }
-        setPublishedExport(await publishResponse.json());
-        setSelectedStage(6);
-        setSelectedAgent(16);
       } else {
         setBoardHealth(null);
       }
@@ -1138,6 +1553,54 @@ export default function Home() {
     setLoginPassword("");
     setLoginError("");
   }
+
+  const currentJob = (() => {
+    if (busy) {
+      const label = session?.status === "processing_requirements"
+        ? "Extracting requirements..."
+        : session?.status === "processing_clarifications"
+          ? "Preparing clarifications..."
+          : "Job running...";
+      return { label, action: () => undefined, disabled: true };
+    }
+    switch (visibleAgent) {
+      case 1:
+        if (documents.some((item) => item.status !== "processed")) return { label: "Analyze documents", action: beginAnalysis, disabled: false };
+        if (!session) return { label: "Start clarification", action: startClarification, disabled: false };
+        return null;
+      case 3:
+        return requirements.length === 0 ? { label: "Generate requirements", action: generateRequirements, disabled: false } : null;
+      case 4:
+        return decompositions.length === 0 ? { label: "Run decomposition", action: runDecomposition, disabled: false } : null;
+      case 5:
+        return !backlog ? { label: "Build backlog", action: runBacklog, disabled: false } : null;
+      case 6:
+        return !enriched ? { label: "Enrich backlog", action: runEnrichment, disabled: false } : null;
+      case 7:
+        return !estimated ? { label: "Estimate backlog", action: runEstimation, disabled: false } : null;
+      case 8:
+        return dependencies === null ? { label: "Analyze dependencies", action: runDependencies, disabled: false }
+          : !estimationBrief ? { label: "Save Epic order below", action: () => undefined, disabled: true } : null;
+      case 9:
+        return !planningReady ? { label: planningIssues.some((item) => item.field === "capacity_hours") ? "Upload revised planning data" : "Upload planning data", action: () => window.document.getElementById("planning-data-upload")?.click(), disabled: false } : null;
+      case 10:
+        return assignments.length === 0 ? { label: "Recommend assignments", action: runAssignment, disabled: !planningReady } : null;
+      case 11:
+        return sprintPlan.length === 0
+          ? { label: sprintScope?.reviewed ? "Plan approved scope" : "Review Task scope below", action: runSprintPlanning, disabled: assignments.length === 0 || !sprintScope?.reviewed }
+          : null;
+      case 12:
+        return !duplicatesComplete ? { label: "Check duplicates", action: runDuplicateDetection, disabled: sprintPlan.length === 0 } : null;
+      case 13:
+        return qualityResults.length === 0 ? { label: "Validate 85% readiness", action: runQualityValidation, disabled: !duplicatesComplete } : null;
+      case 14:
+        return !boardHealth ? { label: "Assess board health", action: runBoardHealthAssessment, disabled: qualityResults.length === 0 || qualityResults.some((item) => !item.passed) } : null;
+      case 16:
+        return !publishedExport ? { label: "Publish approved workbook", action: runPublication, disabled: !approved } : null;
+      default:
+        return null;
+    }
+  })();
 
   if (!hydrated) {
     return <div className="min-h-screen bg-[var(--canvas)]" aria-label="Loading Sprint Sarthi" />;
@@ -1308,8 +1771,18 @@ export default function Home() {
                       Continue workflow
                     </button>
                     <button type="button" onClick={() => setHistoryProject(null)} className="h-9 border border-[var(--line-strong)] bg-white px-3 text-xs font-bold">Close</button>
+                    <button type="button" onClick={() => setDeleteProjectArmed(true)} disabled={busy} className="grid size-9 place-items-center border border-red-300 bg-red-50 text-red-800 disabled:opacity-50" aria-label={`Delete ${historyProject.name}`} title="Delete project"><Trash2 size={15} /></button>
                   </div>
                 </div>
+                {deleteProjectArmed && (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-l-4 border-red-600 bg-red-50 p-4 text-sm text-red-950" role="alert">
+                    <p><strong>Delete {historyProject.name} permanently?</strong> Its workflow history, backlog, planning data, and stored project files will be removed.</p>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setDeleteProjectArmed(false)} disabled={busy} className="h-9 border border-red-300 bg-white px-3 text-xs font-bold disabled:opacity-50">Cancel</button>
+                      <button type="button" onClick={deleteHistoryProject} disabled={busy} className="flex h-9 items-center gap-2 bg-red-700 px-3 text-xs font-bold text-white disabled:opacity-50">{busy ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />} Confirm deletion</button>
+                    </div>
+                  </div>
+                )}
                 <div className="mt-4 grid gap-2 sm:grid-cols-2">
                   {historyDocuments.length === 0 ? (
                     <p className="text-sm text-[var(--muted)]">No architecture documents uploaded.</p>
@@ -1353,7 +1826,7 @@ export default function Home() {
           <>
         <nav
           aria-label="Agent workflow progress"
-          className="mb-8 overflow-x-auto border-y border-[var(--line)] bg-white px-4"
+          className="overflow-x-auto border border-[var(--line)] bg-white px-4"
         >
           <ol className="grid min-w-[2100px] items-start py-4" style={{ gridTemplateColumns: `repeat(${agentStages.length}, minmax(120px, 1fr))` }}>
             {agentStages.map((agent, index) => (
@@ -1394,8 +1867,32 @@ export default function Home() {
             ))}
           </ol>
         </nav>
+        <nav className="agent-transition-dock mb-8" aria-label="Move between agents">
+          <button type="button" onClick={() => navigateToAgent(visibleAgent - 1)} disabled={visibleAgent === 0} className="agent-transition-dock__button" aria-label={visibleAgent > 0 ? `Previous agent: ${agentStages[visibleAgent - 1].label}` : "No previous agent"}>
+            <ChevronLeft size={18} />
+            <span><small>Previous agent</small>{visibleAgent > 0 ? agentStages[visibleAgent - 1].label : "Start"}</span>
+          </button>
+          <div className="agent-transition-dock__current" aria-live="polite">
+            <div className="agent-transition-dock__identity">
+              <small>Current · {visibleAgent + 1} of {agentStages.length}</small>
+              <strong>{currentAgent.label}</strong>
+            </div>
+            {currentJob ? (
+              <button type="button" onClick={currentJob.action} disabled={currentJob.disabled} className="agent-transition-dock__run">
+                {busy ? <Loader2 className="animate-spin" size={14} /> : <Bot size={14} />}
+                {currentJob.label}
+              </button>
+            ) : (
+              <span className="agent-transition-dock__complete"><CheckCircle2 size={14} /> Step complete</span>
+            )}
+          </div>
+          <button type="button" onClick={() => navigateToAgent(visibleAgent + 1)} disabled={visibleAgent >= unlockedAgent} className="agent-transition-dock__button agent-transition-dock__button--next" aria-label={visibleAgent < unlockedAgent ? `Next agent: ${agentStages[visibleAgent + 1].label}` : "Next agent is locked"}>
+            <span><small>{visibleAgent < unlockedAgent ? "Next agent" : "Next step"}</small>{visibleAgent < unlockedAgent ? agentStages[visibleAgent + 1].label : "Complete current job"}</span>
+            {visibleAgent < unlockedAgent ? <ChevronRight size={18} /> : <LockKeyhole size={16} />}
+          </button>
+        </nav>
         <div className="grid min-w-0 gap-7 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <section id={`workflow-stage-${visibleStage}`} className="min-w-0 scroll-mt-6 border border-[var(--line)] bg-white p-5 sm:p-7">
+          <section key={visibleAgent} id={`workflow-stage-${visibleStage}`} className={`agent-view-transition agent-view-${transitionDirection} min-w-0 scroll-mt-6 border border-[var(--line)] bg-white p-5 sm:p-7`}>
             <div className="mb-6 flex items-start gap-3">
               <span className="grid size-10 shrink-0 place-items-center bg-[var(--soft)] text-[var(--accent)]">
                 <Plus size={20} />
@@ -1440,12 +1937,14 @@ export default function Home() {
                       </button>
                     ))}
                   </div>
-                  {documents.every((item) => item.status === "processed") && (
-                    <button type="button" onClick={session ? () => navigateToAgent(2) : startClarification} disabled={busy} className="mt-4 flex h-11 w-full items-center justify-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white disabled:opacity-50">
-                      {busy ? <Loader2 className="animate-spin" size={16} /> : <ArrowRight size={16} />}
-                      {session ? "Continue to clarification" : busy ? "Preparing clarification..." : "Start clarification"}
-                    </button>
+                  {documents.some((item) => item.status !== "processed") && (
+                    <p className="mt-4 text-xs text-[var(--muted)]">
+                      Analyze all uploaded documents before clarification so every source can contribute evidence.
+                    </p>
                   )}
+                  <p className={`mt-3 border-l-2 bg-white p-3 text-sm font-semibold ${documents.every((item) => item.status === "processed") ? "border-[var(--success)]" : "border-[var(--accent)]"}`}>
+                    {documents.every((item) => item.status === "processed") ? "Document evidence ready" : "Document analysis ready"}
+                  </p>
                 </div>
                 <div className="min-w-0 border border-[var(--line)] bg-white p-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1486,9 +1985,6 @@ export default function Home() {
                     {document?.original_name} · {document ? `${(document.size_bytes / 1024).toFixed(1)} KB` : "No document"}
                   </p>
                 </div>
-                <button type="button" onClick={() => navigateToStage(1)} className="flex h-10 w-fit items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white">
-                  Continue to clarification <ArrowRight size={16} />
-                </button>
               </div>
             ) : visibleStage === 1 && clarificationsComplete && !clarification ? (
               <div className="border border-[var(--line)] bg-[var(--soft)] p-5 sm:p-6">
@@ -1496,9 +1992,6 @@ export default function Home() {
                   <CheckCircle2 className="mx-auto mb-4 text-[var(--success)]" size={34} />
                   <strong className="block text-lg">Clarifications complete</strong>
                   <p className="mt-2 text-sm text-[var(--muted)]">Every human choice is retained with its action and timestamp.</p>
-                  <button type="button" onClick={() => navigateToStage(2)} className="mx-auto mt-6 flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white">
-                    Open generated work <ArrowRight size={16} />
-                  </button>
                 </div>
                 <div className="mt-6 grid gap-3 text-left">
                   {clarificationHistory.map((item) => (
@@ -1703,15 +2196,7 @@ export default function Home() {
                       {decompositions.length} components
                     </span>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={runDecomposition}
-                      disabled={busy}
-                      className="flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white disabled:opacity-50"
-                    >
-                      {busy ? <Loader2 className="animate-spin" size={16} /> : <GitBranch size={16} />}
-                      {busy ? "Decomposing..." : "Run decomposition"}
-                    </button>
+                    <span className="text-sm font-bold text-[var(--accent)]">Ready to decompose</span>
                   )}
                 </div>
                 {requirements.map((requirement) => {
@@ -1793,19 +2278,9 @@ export default function Home() {
                         <h3 className="mt-1 font-display text-xl font-semibold">Delivery components</h3>
                       </div>
                       {backlog ? (
-                        <button type="button" onClick={() => navigateToAgent(5)} className="flex h-10 items-center gap-2 bg-[var(--ink)] px-4 text-sm font-bold text-white">
-                          Open {backlog.epics.length + backlog.stories.length + backlog.tasks.length} backlog items <ArrowRight size={16} />
-                        </button>
+                        <span className="text-sm font-bold text-[var(--success)]">{backlog.epics.length + backlog.stories.length + backlog.tasks.length} backlog items ready</span>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={runBacklog}
-                          disabled={busy}
-                          className="flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white disabled:opacity-50"
-                        >
-                          {busy ? <Loader2 className="animate-spin" size={16} /> : <GitBranch size={16} />}
-                          {busy ? "Building..." : "Build backlog"}
-                        </button>
+                        <span className="text-sm font-bold text-[var(--accent)]">Ready to build</span>
                       )}
                     </div>
                     <div className="grid gap-3">
@@ -1825,7 +2300,7 @@ export default function Home() {
                     </div>
                   </section>
                 )}
-                {visibleAgent >= 5 && visibleAgent <= 8 && backlog && (
+                {visibleAgent >= 5 && visibleAgent <= 16 && backlog && (
                   <section className="scroll-mt-6">
                     <div className="flex items-center justify-between gap-4">
                       <div>
@@ -1835,39 +2310,66 @@ export default function Home() {
                           {visibleAgent === 6 && "Business value and acceptance criteria"}
                           {visibleAgent === 7 && "Story points and task-hour estimates"}
                           {visibleAgent === 8 && "Dependency map and delivery risks"}
+                          {visibleAgent >= 9 && agentStages[visibleAgent].description}
                         </h3>
                       </div>
                       {visibleAgent === 5 ? (
-                        <button type="button" onClick={() => navigateToAgent(6)} className="flex h-10 items-center gap-2 bg-[var(--ink)] px-4 text-sm font-bold text-white">
-                          Open enrichment <ArrowRight size={16} />
-                        </button>
+                        <span className="text-sm font-bold text-[var(--success)]">Hierarchy ready</span>
                       ) : visibleAgent === 6 && enriched ? (
-                        <button type="button" onClick={() => navigateToAgent(7)} className="flex h-10 items-center gap-2 bg-[var(--ink)] px-4 text-sm font-bold text-white">
-                          Open estimation <ArrowRight size={16} />
-                        </button>
+                        <span className="text-sm font-bold text-[var(--success)]">Enrichment complete</span>
                       ) : visibleAgent === 6 ? (
-                        <button type="button" onClick={runEnrichment} disabled={busy} className="flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white disabled:opacity-50">
-                          {busy ? <Loader2 className="animate-spin" size={16} /> : <Bot size={16} />}
-                          {busy ? "Enriching..." : "Enrich backlog"}
-                        </button>
+                        <span className="text-sm font-bold text-[var(--accent)]">Ready to enrich</span>
                       ) : visibleAgent === 7 && estimated ? (
-                        <button type="button" onClick={() => navigateToAgent(8)} className="flex h-10 items-center gap-2 bg-[var(--ink)] px-4 text-sm font-bold text-white">
-                          Open dependencies <ArrowRight size={16} />
-                        </button>
+                        <span className="text-sm font-bold text-[var(--success)]">Estimates ready</span>
                       ) : visibleAgent === 7 ? (
-                        <button type="button" onClick={runEstimation} disabled={busy} className="flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white disabled:opacity-50">
-                          {busy ? <Loader2 className="animate-spin" size={16} /> : <Bot size={16} />}
-                          {busy ? "Estimating..." : "Estimate backlog"}
-                        </button>
+                        <span className="text-sm font-bold text-[var(--accent)]">Ready to estimate</span>
                       ) : dependencies !== null ? (
-                        <span className="text-sm font-bold text-[var(--success)]">Dependencies analyzed</span>
+                        <span className={`text-sm font-bold ${estimationBrief ? "text-[var(--success)]" : "text-[var(--accent)]"}`}>{estimationBrief ? "Dependencies and Epic order reviewed" : "Epic order review required"}</span>
                       ) : (
-                        <button type="button" onClick={runDependencies} disabled={busy} className="flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white disabled:opacity-50">
-                          {busy ? <Loader2 className="animate-spin" size={16} /> : <GitBranch size={16} />}
-                          {busy ? "Analyzing..." : "Analyze dependencies"}
-                        </button>
+                        <span className="text-sm font-bold text-[var(--accent)]">Ready to analyze</span>
                       )}
                     </div>
+                    {visibleAgent === 8 && dependencies !== null && (
+                      <form onSubmit={saveEstimationBrief} className="mt-5 border border-[var(--line-strong)] bg-[var(--soft)] p-5">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <span className="text-xs font-bold uppercase text-[var(--accent)]">Dependency sequencing decision</span>
+                            <h4 className="mt-1 font-display text-lg font-semibold">Parallel work and Epic order</h4>
+                            <p className="mt-1 text-sm text-[var(--muted)]">Review dependency-safe candidates, then set the preferred Epic delivery order.</p>
+                          </div>
+                          {estimationBrief && <span className="bg-green-100 px-2 py-1 text-xs font-bold text-green-800">Answers recorded</span>}
+                        </div>
+                        <label className="mt-4 grid gap-2 text-sm font-semibold">Decision owner<input required value={estimationDraft.answered_by} onChange={(event) => setEstimationDraft((current) => ({ ...current, answered_by: event.target.value }))} className="h-10 border border-[var(--line-strong)] bg-white px-3 font-normal outline-none focus:border-[var(--accent)]" /></label>
+                        <section className="mt-5 border-t border-[var(--line)] pt-4">
+                          <h5 className="text-sm font-bold">Candidate parallel Epic groups</h5>
+                          <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{estimationOptions.parallelism_note}</p>
+                          <div className="mt-3 grid gap-2 md:grid-cols-2">
+                            {estimationOptions.parallel_groups.map((group, index) => (
+                              <div key={group.join("-")} className="border border-[var(--line)] bg-white p-3"><span className="text-[10px] font-bold uppercase text-[var(--accent)]">Parallel group {index + 1}</span><div className="mt-2 flex flex-wrap gap-2">{group.map((epicId) => <span key={epicId} className="bg-[var(--soft)] px-2 py-1 text-xs font-bold">{epicId}</span>)}</div></div>
+                            ))}
+                          </div>
+                        </section>
+                        <section className="mt-5 border-t border-[var(--line)] pt-4">
+                          <h5 className="text-sm font-bold">Preferred Epic delivery order</h5>
+                          <div className="mt-3 grid gap-2">
+                            {estimationDraft.ranked_epic_ids.map((epicId, index) => {
+                              const epic = estimationOptions.epics.find((item) => item.stable_id === epicId);
+                              if (!epic) return null;
+                              return <div key={epicId} className="grid grid-cols-[32px_minmax(0,1fr)_72px] items-center gap-3 border border-[var(--line)] bg-white p-3">
+                                <span className="grid size-8 place-items-center bg-[var(--ink)] text-xs font-bold text-white">{index + 1}</span>
+                                <div className="min-w-0"><strong className="block text-sm">{epic.stable_id} · {epic.title}</strong><span className="text-xs text-[var(--muted)]">{epic.architecture_layer} · {epic.business_value}</span></div>
+                                <div className="flex justify-end gap-1"><button type="button" onClick={() => moveRankedEpic(index, -1)} disabled={index === 0} className="grid size-8 place-items-center border border-[var(--line)] disabled:opacity-30" aria-label={`Move ${epic.stable_id} up`}><ChevronUp size={15} /></button><button type="button" onClick={() => moveRankedEpic(index, 1)} disabled={index === estimationDraft.ranked_epic_ids.length - 1} className="grid size-8 place-items-center border border-[var(--line)] disabled:opacity-30" aria-label={`Move ${epic.stable_id} down`}><ChevronDown size={15} /></button></div>
+                              </div>;
+                            })}
+                          </div>
+                        </section>
+                        <label className="mt-4 grid gap-2 text-sm font-semibold">Why is this the correct business priority order?<textarea required value={estimationDraft.priority_rationale} onChange={(event) => setEstimationDraft((current) => ({ ...current, priority_rationale: event.target.value }))} maxLength={4000} className="min-h-24 resize-y border border-[var(--line-strong)] bg-white p-3 font-normal outline-none focus:border-[var(--accent)]" /></label>
+                        <button type="submit" disabled={estimationBriefBusy} className="mt-4 flex h-10 items-center gap-2 bg-[var(--ink)] px-4 text-sm font-bold text-white disabled:opacity-50">
+                          {estimationBriefBusy ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
+                          {estimationBriefBusy ? "Saving order..." : estimationBrief ? "Update Epic order" : "Save Epic order"}
+                        </button>
+                      </form>
+                    )}
                     <div className="mt-4 grid gap-4">
                       {backlog.epics.map((epic) => (
                         <article key={epic.id} className="border-l-4 border-[var(--accent)] bg-white p-4">
@@ -1875,17 +2377,25 @@ export default function Home() {
                             <div>
                               <strong className="text-xs text-[var(--accent)]">{epic.stable_id} · EPIC</strong>
                               <h4 className="mt-1 font-display text-lg font-semibold">{epic.title}</h4>
+                              <p className="mt-1 text-xs font-semibold text-[var(--muted)]">Architecture layer: {epic.architecture_layer || "Legacy / unspecified"}</p>
                               {visibleAgent >= 6 && <p className="mt-1 text-sm text-[var(--muted)]">{epic.business_value}</p>}
                               {visibleAgent >= 6 && <span className="mt-2 inline-block bg-[var(--soft)] px-2 py-1 text-xs font-semibold">{epic.priority}</span>}
                             </div>
                             <Traceability apiUrl={API_URL} itemId={epic.id} itemType="epic" itemLabel={`${epic.stable_id}: ${epic.title}`} sourceCount={epic.source_references.length} />
                           </div>
+                          {backlog.features.filter((feature) => feature.epic_stable_id === epic.stable_id).length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {backlog.features.filter((feature) => feature.epic_stable_id === epic.stable_id).map((feature) => (
+                                <span key={feature.id} className="border border-[var(--line)] bg-white px-2 py-1 text-xs font-semibold">{feature.stable_id} · {feature.title}</span>
+                              ))}
+                            </div>
+                          )}
                           <div className="mt-4 grid gap-3 pl-3">
                             {backlog.stories.filter((story) => story.epic_stable_id === epic.stable_id).map((story) => (
                               <div key={story.id} className="border-l-2 border-[var(--line)] bg-[var(--soft)] p-3">
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
-                                    <strong className="text-xs text-[var(--accent)]">{story.stable_id} · STORY</strong>
+                                    <strong className="text-xs text-[var(--accent)]">{story.feature_stable_id} → {story.stable_id} · STORY</strong>
                                     <h5 className="mt-1 font-semibold">{story.title}</h5>
                                     <p className="mt-1 text-sm text-[var(--muted)]">{story.user_story}</p>
                                     {visibleAgent >= 7 && story.story_points !== null && (
@@ -1896,6 +2406,7 @@ export default function Home() {
                                         {story.acceptance_criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}
                                       </ul>
                                     )}
+                                    {story.definition_of_done?.length > 0 && <p className="mt-2 text-xs text-[var(--muted)]"><strong>DoD:</strong> {story.definition_of_done.join(" · ")}</p>}
                                   </div>
                                   <Traceability apiUrl={API_URL} itemId={story.id} itemType="story" itemLabel={`${story.stable_id}: ${story.title}`} sourceCount={story.source_references.length} />
                                 </div>
@@ -1903,8 +2414,11 @@ export default function Home() {
                                   {backlog.tasks.filter((task) => task.story_stable_id === story.stable_id).map((task) => (
                                     <div key={task.id} className="flex items-start justify-between gap-3 border-l border-[var(--line)] bg-white p-3">
                                       <div>
-                                        <strong className="text-xs text-[var(--accent)]">{task.stable_id} · {task.task_type.toUpperCase()}</strong>
+                                        <strong className="text-xs text-[var(--accent)]">{task.stable_id} · {task.work_category?.toUpperCase()} · {task.task_type.toUpperCase()}</strong>
                                         <p className="mt-1 text-sm font-semibold">{task.title}</p>
+                                        <p className="mt-1 text-xs text-[var(--muted)]"><strong>Sources:</strong> {task.source_references.join("; ")}</p>
+                                        {task.acceptance_criteria?.length > 0 && <p className="mt-1 text-xs text-[var(--muted)]"><strong>Acceptance:</strong> {task.acceptance_criteria.join(" · ")}</p>}
+                                        {task.definition_of_done?.length > 0 && <p className="mt-1 text-xs text-[var(--muted)]"><strong>DoD:</strong> {task.definition_of_done.join(" · ")}</p>}
                                         {visibleAgent >= 7 && task.estimated_hours !== null && (
                                           <p className="mt-1 text-xs text-[var(--muted)]">{task.estimated_hours} hours · {task.estimation_rationale}</p>
                                         )}
@@ -1939,21 +2453,18 @@ export default function Home() {
                             <div>
                               <strong className="text-sm">Planning data</strong>
                               <p className="mt-1 text-xs text-[var(--muted)]">Upload the Teams, TeamMembers, Sprints, Holidays, and optional Leaves workbook.</p>
+                              <a href={`${API_URL}/planning-data/template`} download className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-[var(--accent)] underline-offset-4 hover:underline">
+                                <Download size={14} /> Download editable template with sample entries
+                              </a>
                             </div>
                             {planningReady ? (
                               assignments.length > 0 ? (
                                 <span className="text-sm font-bold text-[var(--success)]">Assignments proposed</span>
                               ) : (
-                                <button type="button" onClick={runAssignment} disabled={busy} className="flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white disabled:opacity-50">
-                                  {busy ? <Loader2 className="animate-spin" size={16} /> : <Bot size={16} />}
-                                  {busy ? "Matching..." : "Recommend assignments"}
-                                </button>
+                                <span className="text-sm font-bold text-[var(--accent)]">Ready for assignment</span>
                               )
                             ) : (
-                              <label className="flex h-10 cursor-pointer items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white">
-                                <Upload size={16} /> {busy ? "Validating..." : "Upload planning XLSX"}
-                                <input type="file" accept=".xlsx" onChange={uploadPlanningData} disabled={busy} className="sr-only" />
-                              </label>
+                              <><span className="text-sm font-bold text-[var(--accent)]">Planning workbook required</span><input id="planning-data-upload" type="file" accept=".xlsx" onChange={uploadPlanningData} disabled={busy} className="sr-only" /></>
                             )}
                           </div>
                           {planningIssues.length > 0 && (
@@ -1979,6 +2490,53 @@ export default function Home() {
                               ))}
                             </div>
                           )}
+                          {visibleAgent === 11 && sprintScope && (
+                            <form onSubmit={saveSprintScopeReview} className="mt-4 border-t border-[var(--line)] pt-4">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <span className="text-xs font-bold uppercase text-[var(--accent)]">Sprint scope review</span>
+                                  <h4 className="mt-1 font-display text-lg font-semibold">Approve Tasks for planning</h4>
+                                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Selected Tasks are approved. Unselected Tasks are explicitly discarded, and Stories with no approved Tasks are excluded from the regenerated Sprint plan.</p>
+                                </div>
+                                <div className="text-right text-xs font-bold">
+                                  <span className="text-[var(--success)]">{sprintScopeTaskIds.length} approved</span>
+                                  <span className="mx-2 text-[var(--line-strong)]">/</span>
+                                  <span className="text-red-700">{sprintScope.stories.flatMap((story) => story.tasks).length - sprintScopeTaskIds.length} discarded</span>
+                                </div>
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <button type="button" onClick={() => setSprintScopeTaskIds(sprintScope.stories.flatMap((story) => story.tasks.map((task) => task.stable_id)))} className="h-8 border border-[var(--line-strong)] bg-white px-3 text-xs font-bold">Select all</button>
+                                <button type="button" onClick={() => setSprintScopeTaskIds([])} className="h-8 border border-[var(--line-strong)] bg-white px-3 text-xs font-bold">Clear all</button>
+                              </div>
+                              <div className="mt-3 grid max-h-[560px] gap-3 overflow-y-auto pr-1">
+                                {sprintScope.stories.map((story) => {
+                                  const taskIds = story.tasks.map((task) => task.stable_id);
+                                  const selectedCount = taskIds.filter((id) => sprintScopeTaskIds.includes(id)).length;
+                                  return <article key={story.stable_id} className="border border-[var(--line)] bg-white p-4">
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                      <div><strong className="text-sm">{story.stable_id} · {story.title}</strong><p className="mt-1 text-xs text-[var(--muted)]">{story.story_points} points · {story.priority}</p></div>
+                                      <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" checked={selectedCount === taskIds.length && taskIds.length > 0} onChange={(event) => setSprintScopeTaskIds((current) => event.target.checked ? Array.from(new Set([...current, ...taskIds])) : current.filter((id) => !taskIds.includes(id)))} /> Select Story Tasks</label>
+                                    </div>
+                                    <div className="mt-3 grid gap-2">
+                                      {story.tasks.map((task) => (
+                                        <label key={task.stable_id} className={`grid grid-cols-[20px_minmax(0,1fr)_auto] items-start gap-2 border p-3 text-xs ${sprintScopeTaskIds.includes(task.stable_id) ? "border-green-300 bg-green-50" : "border-red-200 bg-red-50"}`}>
+                                          <input type="checkbox" checked={sprintScopeTaskIds.includes(task.stable_id)} onChange={(event) => setSprintScopeTaskIds((current) => event.target.checked ? [...current, task.stable_id] : current.filter((id) => id !== task.stable_id))} />
+                                          <span><strong className="block">{task.stable_id} · {task.title}</strong><span className="mt-1 block text-[var(--muted)]">{task.work_category.replaceAll("_", " ")}</span></span>
+                                          <span className="font-semibold">{task.estimated_hours ?? "?"}h</span>
+                                        </label>
+                                      ))}
+                                    </div>
+                                  </article>;
+                                })}
+                              </div>
+                              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                                <label className="grid gap-1 text-xs font-bold">Reviewed by<input required value={sprintScopeReviewer} onChange={(event) => setSprintScopeReviewer(event.target.value)} className="h-10 border border-[var(--line-strong)] bg-white px-3 text-sm font-normal" /></label>
+                                <label className="grid gap-1 text-xs font-bold">Scope decision note<input value={sprintScopeNote} onChange={(event) => setSprintScopeNote(event.target.value)} className="h-10 border border-[var(--line-strong)] bg-white px-3 text-sm font-normal" /></label>
+                              </div>
+                              {sprintPlan.length > 0 && <p className="mt-3 border-l-2 border-amber-500 bg-amber-50 p-3 text-xs text-amber-900">Saving this review replaces the existing proposed Sprint plan. Committed Sprints remain unchanged.</p>}
+                              <button type="submit" disabled={busy || sprintScopeTaskIds.length === 0} className="mt-4 flex h-10 items-center gap-2 bg-[var(--ink)] px-4 text-sm font-bold text-white disabled:opacity-50"><CheckCircle2 size={16} /> {sprintScope.reviewed ? "Update approved scope" : "Approve selected scope"}</button>
+                            </form>
+                          )}
                           {sprintPlan.length > 0 && (
                             <div id="workflow-content-5" className="scroll-mt-6 mt-4 border-t border-[var(--line)] pt-4">
                               <strong className="text-sm">Proposed sprint plan</strong>
@@ -1992,6 +2550,55 @@ export default function Home() {
                               </div>
                             </div>
                           )}
+                          {visibleAgent === 12 && duplicatesComplete && (
+                            <form onSubmit={checkProposedStory} className="mt-4 border-t border-[var(--line)] pt-4">
+                              <span className="text-xs font-bold uppercase text-[var(--accent)]">New-story gate</span>
+                              <h4 className="mt-1 font-display text-lg font-semibold">Check before creation</h4>
+                              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                <input required value={newStoryDraft.title} onChange={(event) => setNewStoryDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Story title" className="h-10 border border-[var(--line)] bg-white px-3 text-sm" />
+                                <select value={newStoryDraft.priority} onChange={(event) => setNewStoryDraft((current) => ({ ...current, priority: event.target.value }))} className="h-10 border border-[var(--line)] bg-white px-3 text-sm"><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select>
+                                <textarea required value={newStoryDraft.user_story} onChange={(event) => setNewStoryDraft((current) => ({ ...current, user_story: event.target.value }))} placeholder="As a..., I want..., so that..." className="min-h-20 border border-[var(--line)] bg-white p-3 text-sm md:col-span-2" />
+                                <textarea required value={newStoryDraft.description} onChange={(event) => setNewStoryDraft((current) => ({ ...current, description: event.target.value }))} placeholder="Description" className="min-h-20 border border-[var(--line)] bg-white p-3 text-sm md:col-span-2" />
+                                <select value={newStoryDraft.story_points} onChange={(event) => setNewStoryDraft((current) => ({ ...current, story_points: event.target.value }))} className="h-10 border border-[var(--line)] bg-white px-3 text-sm">{[1, 2, 3, 5, 8, 13].map((point) => <option key={point}>{point}</option>)}</select>
+                                <textarea required value={newStoryDraft.source_references} onChange={(event) => setNewStoryDraft((current) => ({ ...current, source_references: event.target.value }))} placeholder="Source references, one per line" className="min-h-20 border border-[var(--line)] bg-white p-3 text-sm" />
+                                <textarea required value={newStoryDraft.acceptance_criteria} onChange={(event) => setNewStoryDraft((current) => ({ ...current, acceptance_criteria: event.target.value }))} placeholder="Acceptance criteria, one per line" className="min-h-24 border border-[var(--line)] bg-white p-3 text-sm" />
+                                <textarea required value={newStoryDraft.definition_of_done} onChange={(event) => setNewStoryDraft((current) => ({ ...current, definition_of_done: event.target.value }))} placeholder="Definition of Done, one per line" className="min-h-24 border border-[var(--line)] bg-white p-3 text-sm" />
+                              </div>
+                              <button type="submit" disabled={busy} className="mt-3 flex h-10 items-center gap-2 bg-[var(--ink)] px-4 text-sm font-bold text-white disabled:opacity-50"><ShieldCheck size={16} /> Check semantic duplicates</button>
+                              {newStoryCheck && (
+                                <div className="mt-3 border border-[var(--line-strong)] bg-white p-4 text-sm">
+                                  <strong className="capitalize">{newStoryCheck.classification}</strong>
+                                  <p className="mt-1 text-[var(--muted)]">{newStoryCheck.rationale}</p>
+                                  {newStoryCheck.equivalent_story_id && <p className="mt-2 font-semibold">Equivalent ticket: {newStoryCheck.equivalent_story_id}</p>}
+                                  {newStoryCheck.clarifying_questions.map((question) => <p key={question} className="mt-2 text-amber-900">{question}</p>)}
+                                  {newStoryCheck.classification === "new" && newStoryCheck.status !== "created" && <button type="button" onClick={confirmNewStory} className="mt-3 h-9 bg-[var(--accent)] px-3 text-xs font-bold text-white">Confirm story creation</button>}
+                                  {newStoryCheck.status === "created" && <p className="mt-2 font-bold text-[var(--success)]">Story created. Sprint plan unchanged.</p>}
+                                </div>
+                              )}
+                            </form>
+                          )}
+                          {visibleAgent === 13 && qualityClarifications.some((item) => item.status === "pending") && (
+                            <div className="mt-4 border-t border-[var(--line)] pt-4">
+                              <span className="text-xs font-bold uppercase text-[var(--accent)]">85% readiness gate</span>
+                              <h4 className="mt-1 font-display text-lg font-semibold">Human clarification required</h4>
+                              <div className="mt-3 grid gap-3">
+                                {qualityClarifications.filter((item) => item.status === "pending").map((item) => (
+                                  <article key={item.id} className="border border-amber-300 bg-amber-50 p-4">
+                                    <strong className="text-sm">{item.item_id} · {item.item_type}</strong>
+                                    <p className="mt-1 text-xs text-amber-900">{item.question}</p>
+                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                      {item.missing_fields.map((check) => {
+                                        const field = check === "source_traceable" ? "source_references" : check === "priority_set" ? "priority" : check === "estimated" ? item.item_type === "story" ? "story_points" : "estimated_hours" : check.replace(/_present$/, "");
+                                        const multiline = ["source_references", "acceptance_criteria", "definition_of_done"].includes(field);
+                                        return <label key={field} className="grid gap-1 text-xs font-bold capitalize">{field.replaceAll("_", " ")}{multiline ? <textarea value={qualityAnswerDrafts[item.id]?.[field] ?? ""} onChange={(event) => setQualityAnswerDrafts((current) => ({ ...current, [item.id]: { ...current[item.id], [field]: event.target.value } }))} placeholder="One value per line" className="min-h-20 border border-amber-300 bg-white p-2 font-normal" /> : <input value={qualityAnswerDrafts[item.id]?.[field] ?? ""} onChange={(event) => setQualityAnswerDrafts((current) => ({ ...current, [item.id]: { ...current[item.id], [field]: event.target.value } }))} className="h-9 border border-amber-300 bg-white px-2 font-normal" />}</label>;
+                                      })}
+                                    </div>
+                                    <button type="button" onClick={() => answerQualityClarification(item)} disabled={busy} className="mt-3 h-9 bg-[var(--ink)] px-3 text-xs font-bold text-white disabled:opacity-50">Record answer</button>
+                                  </article>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                           {qualityResults.length > 0 && boardHealth && (
                             <div className="mt-4 border-t border-[var(--line)] pt-4">
                               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2001,13 +2608,29 @@ export default function Home() {
                                 </div>
                                 <span className="bg-amber-100 px-2 py-1 text-xs font-bold text-amber-900">Human approval required</span>
                               </div>
+                              {boardHealth.metrics.quality_score !== undefined && (
+                                <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5">
+                                  {[
+                                    ["Quality", boardHealth.metrics.quality_score, 35],
+                                    ["Duplicate readiness", boardHealth.metrics.duplicate_readiness_score, 10],
+                                    ["Dependency readiness", boardHealth.metrics.dependency_readiness_score, 15],
+                                    ["Delivery feasibility", boardHealth.metrics.delivery_feasibility_score, 30],
+                                    ["Ownership coverage", boardHealth.metrics.ownership_coverage_score, 10],
+                                  ].map(([label, value, maximum]) => (
+                                    <div key={String(label)} className="border-l-2 border-[var(--accent)] pl-2">
+                                      <span className="block text-[var(--muted)]">{label}</span>
+                                      <strong>{Number(value).toFixed(1)} / {maximum}</strong>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                               {boardHealth.issues.map((issue) => <p key={issue} className="mt-2 text-xs text-amber-900">{issue}</p>)}
                               {!publishedExport && (
                                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                                   <input value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="Reviewer name" className="h-10 border border-[var(--line)] bg-white px-3 text-sm" />
                                   <input value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="Review note" className="h-10 border border-[var(--line)] bg-white px-3 text-sm" />
                                   <div className="flex flex-wrap gap-2 md:col-span-2">
-                                    <button type="button" onClick={() => submitApproval("approve")} disabled={busy || !reviewer.trim()} className="h-10 bg-[var(--success)] px-4 text-sm font-bold text-white disabled:opacity-50">Approve & publish</button>
+                                    <button type="button" onClick={() => submitApproval("approve")} disabled={busy || !reviewer.trim()} className="h-10 bg-[var(--success)] px-4 text-sm font-bold text-white disabled:opacity-50">Approve</button>
                                     <button type="button" onClick={() => submitApproval("request_changes")} disabled={busy || !reviewer.trim()} className="h-10 border border-[var(--line)] bg-white px-4 text-sm font-bold disabled:opacity-50">Request changes</button>
                                     <button type="button" onClick={() => submitApproval("reject")} disabled={busy || !reviewer.trim()} className="h-10 border border-red-300 bg-red-50 px-4 text-sm font-bold text-red-800 disabled:opacity-50">Reject</button>
                                   </div>
@@ -2040,21 +2663,7 @@ export default function Home() {
                     Approved answers are ready for normalization into atomic
                     requirements.
                   </p>
-                  <button
-                    type="button"
-                    onClick={generateRequirements}
-                    disabled={busy}
-                    className="mt-6 flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white disabled:opacity-50"
-                  >
-                    {busy ? (
-                      <Loader2 className="animate-spin" size={16} />
-                    ) : (
-                      <Bot size={16} />
-                    )}{" "}
-                    {busy
-                      ? "Generating requirements..."
-                      : "Generate requirements"}
-                  </button>
+                  <p className="mt-4 text-sm font-bold text-[var(--accent)]">Requirement generation ready</p>
                 </div>
               </div>
             ) : (
@@ -2086,30 +2695,9 @@ export default function Home() {
                         <Plus size={16} /> Add architectures
                         <input className="sr-only" type="file" multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv" onChange={uploadDocument} disabled={busy} />
                       </label>
-                      <button
-                        type="button"
-                        onClick={beginAnalysis}
-                        disabled={busy}
-                        className="flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white disabled:opacity-50"
-                      >
-                        {busy ? <Loader2 className="animate-spin" size={16} /> : <Bot size={16} />}
-                        {busy ? "Analyzing..." : `Analyze ${documents.length} document${documents.length === 1 ? "" : "s"}`}
-                      </button>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={startClarification}
-                      disabled={busy}
-                      className="mt-6 flex h-10 items-center gap-2 bg-[var(--accent)] px-4 text-sm font-bold text-white disabled:opacity-50"
-                    >
-                      {busy ? (
-                        <Loader2 className="animate-spin" size={16} />
-                      ) : (
-                        <ArrowRight size={16} />
-                      )}{" "}
-                      {busy ? "Generating questions..." : "Start clarification"}
-                    </button>
+                    <p className="mt-4 text-sm font-bold text-[var(--success)]">Document analysis complete</p>
                   )}
                 </div>
               </div>
@@ -2142,11 +2730,6 @@ export default function Home() {
                 </div>
                 <span className="grid size-8 shrink-0 place-items-center bg-[var(--ink)] text-xs font-bold text-white">{visibleAgent + 1}</span>
               </div>
-              {visibleAgent !== unlockedAgent && (
-                <button type="button" onClick={() => navigateToAgent(unlockedAgent)} className="mt-4 flex h-9 w-full items-center justify-center gap-2 bg-[var(--ink)] px-3 text-xs font-bold text-white">
-                  Return to current step <ArrowRight size={14} />
-                </button>
-              )}
             </div>
 
             {session && (

@@ -1,10 +1,11 @@
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,6 +79,65 @@ class PlanningWorkbook:
     holidays: list[dict[str, object]] = field(default_factory=list)
     leaves: list[dict[str, object]] = field(default_factory=list)
     issues: list[PlanningIssue] = field(default_factory=list)
+
+
+def build_planning_template() -> bytes:
+    workbook = Workbook()
+    instructions = workbook.active
+    instructions.title = "Instructions"
+    instructions.append(["Planning Data Template", "Replace the sample values before upload."])
+    instructions.append(["Sheet", "Purpose"])
+    instructions.append(["Teams", "Team identifiers and names."])
+    instructions.append(["TeamMembers", "Skills and verified available hours used for Task assignment."])
+    instructions.append(["Sprints", "Sprint dates and available story-point capacity."])
+    instructions.append(["Holidays", "Location holidays used to validate capacity."])
+    instructions.append(["Leaves", "Known member leave used to adjust capacity."])
+
+    teams = workbook.create_sheet("Teams")
+    teams.append(["Team ID", "Team Name"])
+    teams.append(["TEAM-PLATFORM", "Platform Team"])
+    teams.append(["TEAM-EXPERIENCE", "Experience Team"])
+
+    members = workbook.create_sheet("TeamMembers")
+    members.append([
+        "Team Member ID", "Team ID", "Name", "Role", "Skills",
+        "Capacity Hours", "Allocation %", "Location",
+    ])
+    members.append(["MEM-001", "TEAM-PLATFORM", "Sample Backend Engineer", "Backend Engineer", "Python, FastAPI, SQL", 80, 100, "Pune"])
+    members.append(["MEM-002", "TEAM-PLATFORM", "Sample QA Engineer", "QA Engineer", "API Testing, Pytest, Automation", 64, 80, "Pune"])
+    members.append(["MEM-003", "TEAM-EXPERIENCE", "Sample Frontend Engineer", "Frontend Engineer", "React, TypeScript, Accessibility", 80, 100, "Berlin"])
+    members.append(["MEM-004", "TEAM-EXPERIENCE", "Sample UX Designer", "UX Designer", "UX Research, Figma, Design Systems", 48, 60, "Berlin"])
+
+    next_monday = date.today() + timedelta(days=(7 - date.today().weekday()) % 7)
+    sprints = workbook.create_sheet("Sprints")
+    sprints.append(["Sprint ID", "Sprint Name", "Start Date", "End Date", "Capacity Points", "Committed Points"])
+    for index in range(3):
+        start = next_monday + timedelta(days=index * 14)
+        sprints.append([f"SPR-{index + 1:02d}", f"Sprint {index + 1}", start, start + timedelta(days=11), 40, 0])
+
+    holidays = workbook.create_sheet("Holidays")
+    holidays.append(["Date", "Holiday Name", "Location"])
+    holidays.append([next_monday + timedelta(days=4), "Sample Local Holiday", "Pune"])
+
+    leaves = workbook.create_sheet("Leaves")
+    leaves.append(["Team Member ID", "Start Date", "End Date", "Reason"])
+    leaves.append(["MEM-003", next_monday + timedelta(days=7), next_monday + timedelta(days=8), "Sample planned leave"])
+
+    header_fill = PatternFill("solid", fgColor="17324D")
+    for sheet in workbook.worksheets:
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for cell in sheet[1]:
+            cell.fill = header_fill
+            cell.font = Font(color="FFFFFF", bold=True)
+            cell.alignment = Alignment(vertical="center")
+        for column in sheet.columns:
+            letter = column[0].column_letter
+            sheet.column_dimensions[letter].width = min(max(len(str(cell.value or "")) for cell in column) + 2, 42)
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
 
 
 def _rows(sheet) -> list[tuple[int, dict[str, object]]]:

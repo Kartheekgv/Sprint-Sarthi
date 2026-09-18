@@ -15,7 +15,10 @@ from app.schemas.provenance import ProvenanceValue, SourceReference
 
 
 SYSTEM_PROMPT = """You are Sprint Sarthi's Decomposition Agent. Return JSON only and never markdown.
-Break requirements into independent, understandable, deliverable components. Split compound requirements and follow INVEST for story-sized work. Preserve supplied requirement IDs. Do not invent scope. Use technical_component only when technical decomposition is explicit in the requirement; otherwise prefer business capabilities, features, or workflows. Every requirement must appear in at least one decomposition."""
+Break requirements into independent, understandable, deliverable components. Split compound requirements and follow INVEST for story-sized work. Produce multiple components when a requirement contains distinct user outcomes, workflows, rules, integrations, or quality concerns. Preserve supplied requirement IDs. Do not invent scope. Use technical_component only when technical decomposition is explicit in the requirement; otherwise prefer business capabilities, features, or workflows. Every requirement must appear in at least one decomposition."""
+
+REQUIREMENTS_PER_BATCH = 10
+MAX_DECOMPOSITIONS = 100
 
 
 @dataclass(frozen=True)
@@ -34,7 +37,6 @@ async def generate_decompositions(
     )).scalars().all()
     if not requirements:
         raise ValueError("No requirements are available for decomposition")
-    requirement_ids = {requirement.stable_id for requirement in requirements}
     requirement_context = [{
         "requirement_id": requirement.stable_id,
         "title": requirement.title,
@@ -57,20 +59,47 @@ async def generate_decompositions(
         "rationale": "string",
         "confidence": 0.9,
     }]}
-    prompt = "Generate decomposition records using this exact shape: " + compact_json(shape) + "\n\nREQUIREMENTS:\n" + compact_json(requirement_context)
-    validation_error = ""
-    for _ in range(2):
-        raw = await provider.generate_text(prompt + validation_error, SYSTEM_PROMPT)
-        try:
-            batch = DecompositionBatch.model_validate_json(raw)
-        except ValidationError as error:
-            validation_error = "\nCorrect these schema errors and return the full JSON again:\n" + str(error)
-            continue
-        referenced_ids = {item_id for item in batch.decompositions for item_id in item.requirement_ids}
-        if referenced_ids == requirement_ids:
-            return DecompositionGeneration(batch, hashlib.sha256(prompt.encode("utf-8")).hexdigest())
-        validation_error = "\nUse only supplied requirement IDs and include every supplied requirement at least once."
-    raise ValueError("LLM decomposition output failed validation after retry")
+    context_batches = [
+        requirement_context[index:index + REQUIREMENTS_PER_BATCH]
+        for index in range(0, len(requirement_context), REQUIREMENTS_PER_BATCH)
+    ]
+    merged_decompositions = []
+    prompts: list[str] = []
+    allocated = 0
+    processed = 0
+    for batch_index, batch_context in enumerate(context_batches):
+        processed += len(batch_context)
+        quota = MAX_DECOMPOSITIONS * processed // len(requirement_context) - allocated
+        allocated += quota
+        prompt = (
+            "Generate decomposition records using this exact shape: " + compact_json(shape)
+            + f"\nReturn between {len(batch_context)} and {quota} decomposition records. "
+            + "Every supplied requirement needs at least one record; split compound requirements when evidence supports distinct deliverable outcomes."
+            + "\n\nREQUIREMENTS:\n" + compact_json(batch_context)
+        )
+        prompts.append(prompt)
+        expected_ids = {item["requirement_id"] for item in batch_context}
+        validation_error = ""
+        for _ in range(3):
+            raw = await provider.generate_text(prompt + validation_error, SYSTEM_PROMPT)
+            try:
+                batch = DecompositionBatch.model_validate_json(raw)
+            except ValidationError as error:
+                validation_error = "\nCorrect these schema errors and return the full JSON again:\n" + str(error)
+                continue
+            referenced_ids = {item_id for item in batch.decompositions for item_id in item.requirement_ids}
+            if referenced_ids == expected_ids and len(batch.decompositions) <= quota:
+                merged_decompositions.extend(batch.decompositions)
+                break
+            validation_error = (
+                "\nUse only supplied requirement IDs, include every supplied requirement at least once, "
+                f"and return no more than {quota} records."
+            )
+        else:
+            raise ValueError(f"LLM decomposition batch {batch_index + 1} failed validation after 3 attempts")
+
+    merged = DecompositionBatch(decompositions=merged_decompositions)
+    return DecompositionGeneration(merged, hashlib.sha256("\n".join(prompts).encode("utf-8")).hexdigest())
 
 
 def _source_evidence(requirements: list[Requirement]) -> list[SourceReference]:

@@ -24,6 +24,9 @@ class _Database:
     async def execute(self, _statement):
         return _ScalarResult(next(self._result_sets))
 
+    async def scalar(self, _statement):
+        return None
+
 
 class _Provider:
     def __init__(self):
@@ -64,7 +67,7 @@ async def test_generate_sprint_plan_covers_100_stories_across_10_sprints():
         item_stable_id=story.stable_id, team_member_id="member-1",
     ) for story in stories]
     provider = _Provider()
-    database = _Database([stories, sprints, assignments, members, []])
+    database = _Database([stories, sprints, assignments, members, [], []])
 
     generation = await generate_sprint_plan(database, "project-1", "session-1", provider)
 

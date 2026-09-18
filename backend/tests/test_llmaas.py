@@ -7,6 +7,7 @@ from pydantic import SecretStr
 from app.core.config import Settings
 from app.providers import llmaas
 from app.providers.llmaas import LLMAASError, LLMAASProvider, _normalize_json_response
+from app.services.prompting import governed_system_prompt
 
 
 def configured_settings() -> Settings:
@@ -21,6 +22,16 @@ def test_json_response_normalization_accepts_plain_or_fenced_json_only():
     assert _normalize_json_response(' {"requirements": []} ') == '{"requirements": []}'
     assert _normalize_json_response('```json\n{"requirements": []}\n```') == '{"requirements": []}'
     assert _normalize_json_response('Here is JSON:\n{"requirements": []}') == 'Here is JSON:\n{"requirements": []}'
+
+
+def test_governed_system_prompt_applies_multidisciplinary_agile_rules():
+    prompt = governed_system_prompt("Return JSON only.")
+    assert "solution architect" in prompt
+    assert "Scrum Master" in prompt
+    assert "Jira specialist" in prompt
+    assert "Excel/documentation specialist" in prompt
+    assert "Never assume" in prompt
+    assert prompt.endswith("Return JSON only.")
 
 
 @pytest.mark.asyncio
@@ -76,6 +87,7 @@ async def test_provider_uses_oauth_token_and_api_client_header(monkeypatch):
     assert captured["client"]["api_key"] == "oauth-token"
     assert captured["client"]["default_headers"] == {"X-LLM-API-CLIENT-ID": "Bearer api-client-key"}
     assert captured["chat"]["response_format"] == {"type": "json_object"}
+    assert captured["chat"]["temperature"] == 0.0
     assert provider.usage.input_tokens == 15
     assert provider.usage.output_tokens == 4
     assert provider.usage.total_tokens == 19

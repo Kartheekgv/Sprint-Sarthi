@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.entities import DuplicateCandidate, Epic, Task, UserStory
+from app.models.entities import DuplicateCandidate, Epic, Feature, Task, UserStory
 from app.providers.base import LLMProvider
 from app.services.prompting import compact_json
 from app.schemas.duplicates import DuplicateBatch
@@ -49,9 +49,10 @@ def _filter_duplicate_candidates(
 
 async def generate_duplicates(db: AsyncSession, session_id: str, provider: LLMProvider) -> DuplicateGeneration:
     epics = (await db.execute(select(Epic).where(Epic.session_id == session_id).order_by(Epic.stable_id))).scalars().all()
-    stories = (await db.execute(select(UserStory).where(UserStory.session_id == session_id).order_by(UserStory.stable_id))).scalars().all()
-    tasks = (await db.execute(select(Task).where(Task.session_id == session_id).order_by(Task.stable_id))).scalars().all()
-    items = [*epics, *stories, *tasks]
+    features = (await db.execute(select(Feature).where(Feature.session_id == session_id).order_by(Feature.stable_id))).scalars().all()
+    stories = (await db.execute(select(UserStory).where(UserStory.session_id == session_id, UserStory.status != "discarded").order_by(UserStory.stable_id))).scalars().all()
+    tasks = (await db.execute(select(Task).where(Task.session_id == session_id, Task.status != "discarded").order_by(Task.stable_id))).scalars().all()
+    items = [*epics, *features, *stories, *tasks]
     context = [{"stable_id": item.stable_id, "title": item.title, "description": item.description} for item in items]
     shape = {"candidates": [{
         "source_stable_id": "STORY-001", "target_stable_id": "STORY-002",

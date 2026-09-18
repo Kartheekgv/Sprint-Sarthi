@@ -70,6 +70,13 @@ class AnalysisSession(Record):
     current_node: Mapped[str | None] = mapped_column(String(80))
 
 
+class EstimationBrief(Record):
+    __tablename__ = "estimation_briefs"
+    session_id: Mapped[str] = mapped_column(ForeignKey("analysis_sessions.id", ondelete="CASCADE"), unique=True, index=True)
+    answered_by: Mapped[str] = mapped_column(String(200))
+    answers_json: Mapped[str] = mapped_column(Text)
+
+
 class ChatMessage(Record):
     __tablename__ = "chat_messages"
     session_id: Mapped[str] = mapped_column(ForeignKey("analysis_sessions.id", ondelete="CASCADE"), index=True)
@@ -165,9 +172,26 @@ class Epic(Record):
     requirement_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str] = mapped_column(Text)
+    architecture_layer: Mapped[str] = mapped_column(String(200), default="")
     business_value: Mapped[str] = mapped_column(Text, default="")
     priority: Mapped[str] = mapped_column(String(20))
     acceptance_criteria: Mapped[str] = mapped_column(Text, default="")
+    source_references_json: Mapped[str] = mapped_column(Text, default="[]")
+    provenance_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+
+
+class Feature(Record):
+    __tablename__ = "features"
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    session_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    epic_id: Mapped[str] = mapped_column(ForeignKey("epics.id", ondelete="CASCADE"), index=True)
+    stable_id: Mapped[str] = mapped_column(String(50), unique=True)
+    decomposition_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    requirement_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    title: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str] = mapped_column(Text)
+    business_value: Mapped[str] = mapped_column(Text, default="")
     source_references_json: Mapped[str] = mapped_column(Text, default="[]")
     provenance_json: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(20), default="draft")
@@ -178,6 +202,7 @@ class UserStory(Record):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     session_id: Mapped[str | None] = mapped_column(String(36), index=True)
     epic_id: Mapped[str] = mapped_column(ForeignKey("epics.id", ondelete="CASCADE"), index=True)
+    feature_id: Mapped[str | None] = mapped_column(ForeignKey("features.id", ondelete="CASCADE"), index=True)
     stable_id: Mapped[str] = mapped_column(String(50), unique=True)
     decomposition_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     requirement_ids_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -185,6 +210,7 @@ class UserStory(Record):
     user_story: Mapped[str] = mapped_column(Text)
     description: Mapped[str] = mapped_column(Text)
     acceptance_criteria: Mapped[str] = mapped_column(Text, default="")
+    definition_of_done_json: Mapped[str] = mapped_column(Text, default="[]")
     priority: Mapped[str] = mapped_column(String(20))
     story_points: Mapped[int | None] = mapped_column(Integer)
     estimation_rationale: Mapped[str] = mapped_column(Text, default="")
@@ -204,6 +230,9 @@ class Task(Record):
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str] = mapped_column(Text)
     task_type: Mapped[str] = mapped_column(String(30))
+    work_category: Mapped[str] = mapped_column(String(30), default="functional", index=True)
+    acceptance_criteria_json: Mapped[str] = mapped_column(Text, default="[]")
+    definition_of_done_json: Mapped[str] = mapped_column(Text, default="[]")
     priority: Mapped[str] = mapped_column(String(20))
     estimated_hours: Mapped[float | None] = mapped_column(Float)
     estimation_rationale: Mapped[str] = mapped_column(Text, default="")
@@ -322,6 +351,17 @@ class SprintPlanDecision(Record):
     )
 
 
+class SprintScopeReview(Record):
+    __tablename__ = "sprint_scope_reviews"
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("analysis_sessions.id", ondelete="CASCADE"), unique=True, index=True)
+    reviewed_by: Mapped[str] = mapped_column(String(200))
+    selected_task_ids_json: Mapped[str] = mapped_column(Text)
+    discarded_task_ids_json: Mapped[str] = mapped_column(Text)
+    selected_story_ids_json: Mapped[str] = mapped_column(Text)
+    note: Mapped[str] = mapped_column(Text, default="")
+
+
 class AssignmentRecommendation(Record):
     __tablename__ = "assignment_recommendations"
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
@@ -376,6 +416,18 @@ class QualityResult(Record):
     __table_args__ = (CheckConstraint("score BETWEEN 0 AND 100", name="ck_quality_score"),)
 
 
+class QualityClarification(Record):
+    __tablename__ = "quality_clarifications"
+    session_id: Mapped[str] = mapped_column(ForeignKey("analysis_sessions.id", ondelete="CASCADE"), index=True)
+    item_id: Mapped[str] = mapped_column(String(50), index=True)
+    item_type: Mapped[str] = mapped_column(String(20))
+    missing_fields_json: Mapped[str] = mapped_column(Text)
+    question: Mapped[str] = mapped_column(Text)
+    answer_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    __table_args__ = (UniqueConstraint("session_id", "item_id", name="uq_session_quality_clarification_item"),)
+
+
 class BoardHealthResult(Record):
     __tablename__ = "board_health_results"
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
@@ -406,6 +458,14 @@ class DuplicateCandidate(Record):
         CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_duplicate_confidence"),
         UniqueConstraint("session_id", "source_stable_id", "target_stable_id", name="uq_session_duplicate_pair"),
     )
+
+
+class NewStoryCheck(Record):
+    __tablename__ = "new_story_checks"
+    session_id: Mapped[str] = mapped_column(ForeignKey("analysis_sessions.id", ondelete="CASCADE"), index=True)
+    input_json: Mapped[str] = mapped_column(Text)
+    result_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="checked", index=True)
 
 
 class Approval(Record):

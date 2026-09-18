@@ -7,7 +7,8 @@ import pytest
 
 from app.schemas.planning_data import AssignmentBatch
 from app.services.assignment import _rebalance_for_capacity
-from app.services.planning_data import parse_planning_workbook
+from app.services.planning_data import build_planning_template, parse_planning_workbook
+from app.services.quality import calculate_board_health_score
 
 
 def _workbook(include_skills: bool = True) -> bytes:
@@ -41,6 +42,45 @@ def test_planning_workbook_parses_verified_fields():
 def test_planning_workbook_requires_member_skills():
     parsed = parse_planning_workbook(_workbook(include_skills=False))
     assert any(issue.blocking and issue.field == "skills" for issue in parsed.issues)
+
+
+def test_downloadable_planning_template_is_upload_compatible():
+    content = build_planning_template()
+    parsed = parse_planning_workbook(content)
+
+    assert not any(issue.blocking for issue in parsed.issues)
+    assert len(parsed.teams) == 2
+    assert len(parsed.members) == 4
+    assert len(parsed.sprints) == 3
+    assert len(parsed.holidays) == 1
+    assert len(parsed.leaves) == 1
+
+
+@pytest.mark.asyncio
+async def test_planning_template_download(client):
+    response = await client.get("/api/v1/planning-data/template")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "Sprint-Sarthi-Planning-Data-Template.xlsx" in response.headers["content-disposition"]
+    assert not any(issue.blocking for issue in parse_planning_workbook(response.content).issues)
+
+
+def test_board_health_uses_normalized_rates_for_large_boards():
+    score, risk_level, components = calculate_board_health_score(
+        average_quality=100, quality_items=211, duplicate_candidates=13,
+        dependencies=0, high_risk_dependencies=0, stories=61,
+        deferred_stories=21, overloaded_sprints=0, sprints=10,
+        unassigned_stories=0,
+    )
+
+    assert score == 89
+    assert risk_level == "medium"
+    assert components == {
+        "quality": 35.0, "duplicate_readiness": 9.4,
+        "dependency_readiness": 15.0, "delivery_feasibility": 19.7,
+        "ownership_coverage": 10.0,
+    }
 
 
 def test_assignment_rebalances_overloaded_member_with_verified_capacity():

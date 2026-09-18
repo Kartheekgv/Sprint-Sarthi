@@ -17,7 +17,7 @@ class DecompositionDraft(BaseModel):
 
 class DecompositionBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    decompositions: list[DecompositionDraft] = Field(min_length=1, max_length=80)
+    decompositions: list[DecompositionDraft] = Field(min_length=1, max_length=100)
 
 
 class DecompositionRead(BaseModel):

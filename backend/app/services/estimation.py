@@ -60,7 +60,10 @@ async def generate_estimates(
             "stories": batch_stories,
             "tasks": [item for item in task_context if item["story_id"] in story_ids],
         }
-        prompt = "Estimate the backlog using this exact shape: " + compact_json(shape) + "\n\nBACKLOG:\n" + compact_json(context)
+        prompt = (
+            "Estimate the backlog using this exact shape: " + compact_json(shape)
+            + "\n\nBACKLOG:\n" + compact_json(context)
+        )
         prompts.append(prompt)
         expected_local_tasks = {item["stable_id"] for item in context["tasks"]}
         validation_error = ""
