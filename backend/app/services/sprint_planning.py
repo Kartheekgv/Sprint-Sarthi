@@ -28,6 +28,74 @@ class SprintPlanningGeneration:
     prompt_hash: str
 
 
+def _deterministic_sprint_plan(
+    ordered_ids: list[str],
+    context_by_id: dict[str, dict[str, object]],
+    sprint_context: list[dict[str, object]],
+    assignment_by_story: dict[str, str | None],
+    dependency_context: list[dict[str, str]],
+) -> SprintPlanningBatch:
+    sprint_index = {str(item["sprint_id"]): index for index, item in enumerate(sprint_context)}
+    remaining = {
+        str(item["sprint_id"]): max(
+            0.0,
+            float(item["capacity_points"] or 0) - float(item["already_committed_points"] or 0),
+        )
+        for item in sprint_context
+    }
+    prerequisites = {story_id: [] for story_id in ordered_ids}
+    for dependency in dependency_context:
+        prerequisites[dependency["source"]].append(dependency["target"])
+
+    decisions: list[dict[str, object]] = []
+    decision_by_story: dict[str, dict[str, object]] = {}
+    for story_id in ordered_ids:
+        story = context_by_id[story_id]
+        assignee_id = assignment_by_story.get(story_id)
+        committed_sprint_id = story["committed_sprint_id"]
+        if committed_sprint_id is not None:
+            decision = {
+                "story_stable_id": story_id, "decision": "planned",
+                "sprint_id": committed_sprint_id, "assignee_id": assignee_id,
+                "reason": "Preserved in its existing committed sprint; human review remains required.",
+                "confidence": 1.0,
+            }
+        else:
+            prerequisite_decisions = [decision_by_story[item] for item in prerequisites[story_id]]
+            earliest_index = max(
+                (sprint_index[str(item["sprint_id"])] for item in prerequisite_decisions if item["decision"] == "planned"),
+                default=0,
+            )
+            points = float(story["story_points"] or 0)
+            sprint_id = next((
+                str(item["sprint_id"])
+                for index, item in enumerate(sprint_context)
+                if index >= earliest_index and remaining[str(item["sprint_id"])] >= points
+            ), None)
+            if assignee_id and sprint_id and all(item["decision"] == "planned" for item in prerequisite_decisions):
+                remaining[sprint_id] -= points
+                decision = {
+                    "story_stable_id": story_id, "decision": "planned",
+                    "sprint_id": sprint_id, "assignee_id": assignee_id,
+                    "reason": "Placed deterministically using verified capacity, dependency order, and proposed ownership; human review required.",
+                    "confidence": 0.85,
+                }
+            else:
+                reason = "Deferred because verified sprint capacity is insufficient."
+                if not assignee_id:
+                    reason = "Deferred because no verified proposed owner is available."
+                elif any(item["decision"] == "deferred" for item in prerequisite_decisions):
+                    reason = "Deferred because a prerequisite story could not be planned safely."
+                decision = {
+                    "story_stable_id": story_id, "decision": "deferred",
+                    "sprint_id": None, "assignee_id": None, "reason": reason,
+                    "confidence": 1.0,
+                }
+        decisions.append(decision)
+        decision_by_story[story_id] = decision
+    return SprintPlanningBatch.model_validate({"decisions": decisions})
+
+
 async def generate_sprint_plan(db: AsyncSession, project_id: str, session_id: str, provider: LLMProvider) -> SprintPlanningGeneration:
     stories = (await db.execute(select(UserStory).where(UserStory.session_id == session_id).order_by(UserStory.stable_id))).scalars().all()
     scope_review = await db.scalar(select(SprintScopeReview).where(SprintScopeReview.session_id == session_id))
@@ -134,6 +202,9 @@ async def generate_sprint_plan(db: AsyncSession, project_id: str, session_id: st
                 validation_error = "\nCorrect these schema errors and return the full JSON again:\n" + str(error)
                 continue
             ids = [item.story_stable_id for item in batch.decisions]
+            if set(ids) != local_ids or len(ids) != len(local_ids):
+                validation_error = "\nReturn each supplied story exactly once and do not return unknown story IDs."
+                continue
             candidate_decisions = [*merged_decisions, *batch.decisions]
             decision_by_story = {item.story_stable_id: item for item in candidate_decisions}
             candidate_loads = dict(loads)
@@ -172,7 +243,12 @@ async def generate_sprint_plan(db: AsyncSession, project_id: str, session_id: st
                 break
             validation_error = "\nReturn each supplied story exactly once, use valid IDs, stay within remaining capacity, and respect prior dependency decisions."
         else:
-            raise ValueError(f"LLM sprint planning batch {index // STORIES_PER_BATCH + 1} failed validation after retry")
+            fallback = _deterministic_sprint_plan(
+                ordered_ids, context_by_id, sprint_context, assignment_by_story, dependency_context,
+            )
+            return SprintPlanningGeneration(
+                fallback, hashlib.sha256("\n".join(prompts).encode("utf-8")).hexdigest(),
+            )
     result = SprintPlanningBatch(decisions=merged_decisions)
     if {item.story_stable_id for item in result.decisions} != expected_story_ids:
         raise ValueError("Merged sprint plan does not cover every story")

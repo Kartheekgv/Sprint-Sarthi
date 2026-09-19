@@ -51,6 +51,19 @@ class _Provider:
         return json.dumps({"decisions": decisions})
 
 
+class _InvalidProvider:
+    def __init__(self):
+        self.calls = 0
+
+    async def generate_text(self, _prompt, _system_prompt):
+        self.calls += 1
+        return json.dumps({"decisions": [{
+            "story_stable_id": "STORY-999", "decision": "planned",
+            "sprint_id": "SPR-999", "assignee_id": "MEM-999",
+            "reason": "Invalid recommendation returned by the provider.", "confidence": 0.5,
+        }]})
+
+
 @pytest.mark.asyncio
 async def test_generate_sprint_plan_covers_100_stories_across_10_sprints():
     stories = [SimpleNamespace(
@@ -80,3 +93,34 @@ async def test_generate_sprint_plan_covers_100_stories_across_10_sprints():
     for decision in generation.batch.decisions:
         sprint_counts[decision.sprint_id] = sprint_counts.get(decision.sprint_id, 0) + 1
     assert sprint_counts == {f"SPR-{index:03d}": 10 for index in range(1, 11)}
+
+
+@pytest.mark.asyncio
+async def test_generate_sprint_plan_falls_back_after_invalid_llm_output():
+    stories = [SimpleNamespace(
+        id=f"story-{index}", stable_id=f"STORY-{index:03d}", title=f"Story {index}",
+        story_points=5, priority="High",
+    ) for index in range(1, 4)]
+    sprints = [SimpleNamespace(
+        id="sprint-1", external_id="SPR-001", name="Sprint 1",
+        start_date="2026-09-21", end_date="2026-10-04",
+        capacity_points=10, committed_points=0,
+    )]
+    members = [SimpleNamespace(id="member-1", external_id="MEM-001")]
+    assignments = [SimpleNamespace(
+        item_stable_id=story.stable_id, team_member_id="member-1",
+    ) for story in stories]
+    dependencies = [SimpleNamespace(
+        source_stable_id="STORY-002", target_stable_id="STORY-001",
+        dependency_type="requires", risk="medium",
+    )]
+    provider = _InvalidProvider()
+    database = _Database([stories, sprints, assignments, members, dependencies, []])
+
+    generation = await generate_sprint_plan(database, "project-1", "session-1", provider)
+
+    assert provider.calls == 2
+    decisions = {item.story_stable_id: item for item in generation.batch.decisions}
+    assert decisions["STORY-001"].sprint_id == "SPR-001"
+    assert decisions["STORY-002"].sprint_id == "SPR-001"
+    assert decisions["STORY-003"].decision == "deferred"
