@@ -2,6 +2,23 @@
 
 Sprint Sarthi is a human-governed AI Scrum Master that converts architecture documents into a traceable, estimated, dependency-aware, Sprint-ready backlog.
 
+## Run With Docker
+
+Install Docker Desktop on Windows or macOS, or Docker Engine with the Compose plugin on Ubuntu/Linux:
+https://docs.docker.com/get-docker/
+
+From the project folder, start the API and UI together:
+
+```bash
+docker compose up --build
+```
+
+Open http://localhost:3000. The API is available at http://localhost:8000, and the first startup creates the local database automatically.
+
+To configure LLMAAS, copy `backend/.env.example` to `backend/.env`, fill in the credentials, and run `docker compose up --build` again. Docker volumes preserve the database, uploads, and exports between runs.
+
+Stop the containers with `Ctrl+C`, or run `docker compose down` from another terminal.
+
 ## Technology
 
 - Frontend: Next.js, React, TypeScript, Tailwind CSS
