@@ -11,8 +11,7 @@ COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
 
-RUN python -m pip install --upgrade pip \
-    && python -m pip install -e ".[ai]"
+RUN python -m pip install --no-cache-dir .
 
 EXPOSE 8000
 

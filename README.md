@@ -4,16 +4,22 @@ Sprint Sarthi is a human-governed AI Scrum Master that converts architecture doc
 
 ## Run With Docker
 
-Install Docker Desktop on Windows or macOS, or Docker Engine with the Compose plugin on Ubuntu/Linux:
+Install Docker Desktop on Windows/macOS, or Docker Engine with Compose on Ubuntu/Linux:
 https://docs.docker.com/get-docker/
 
-On Ubuntu/Linux, run:
+Run one command from the project folder:
 
+Ubuntu/Linux/macOS:
 ```bash
 bash run.sh
 ```
 
-Open http://localhost:3000. The API health check is http://localhost:8000/health.
+Windows PowerShell:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run.ps1
+```
+
+Open http://localhost:3000. API health: http://localhost:8000/health.
 
 Stop the containers with:
 

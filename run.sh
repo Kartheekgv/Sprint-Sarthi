@@ -4,24 +4,31 @@ set -Eeuo pipefail
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 
-if [[ "$(uname -s)" != "Linux" ]]; then
-  printf '%s\n' "This bootstrap script supports Ubuntu/Linux. Install Docker Desktop on Windows or macOS, then run: docker compose up --build -d" >&2
-  exit 1
-fi
-
 if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is not installed. Installing Docker Engine and Compose..."
-  sudo apt-get update
-  sudo apt-get install -y docker.io docker-compose-v2
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "Docker is not installed. Installing Docker Engine and Compose..."
+    sudo apt-get update
+    sudo apt-get install -y docker.io docker-compose-v2
+  else
+    printf '%s\n' "Docker is required. Install Docker Desktop from https://docs.docker.com/get-docker/ and run this script again." >&2
+    exit 1
+  fi
 fi
 
 if ! docker compose version >/dev/null 2>&1; then
-  echo "Docker Compose is not installed. Installing the Compose plugin..."
-  sudo apt-get update
-  sudo apt-get install -y docker-compose-v2
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "Docker Compose is not installed. Installing the Compose plugin..."
+    sudo apt-get update
+    sudo apt-get install -y docker-compose-v2
+  else
+    printf '%s\n' "Docker Compose is required. Update Docker Desktop and run this script again." >&2
+    exit 1
+  fi
 fi
 
-sudo systemctl enable --now docker
+if command -v systemctl >/dev/null 2>&1; then
+  sudo systemctl enable --now docker
+fi
 
 DOCKER=(docker)
 if ! docker info >/dev/null 2>&1; then
