@@ -53,10 +53,10 @@ class TaskDraft(BaseModel):
 
 class BacklogBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    epics: list[EpicDraft] = Field(min_length=1, max_length=30)
-    features: list[FeatureDraft] = Field(min_length=1, max_length=100)
-    stories: list[StoryDraft] = Field(min_length=1, max_length=100)
-    tasks: list[TaskDraft] = Field(min_length=1, max_length=300)
+    epics: list[EpicDraft] = Field(min_length=1, max_length=100)
+    features: list[FeatureDraft] = Field(min_length=1, max_length=300)
+    stories: list[StoryDraft] = Field(min_length=1, max_length=300)
+    tasks: list[TaskDraft] = Field(min_length=1, max_length=1000)
 
     @model_validator(mode="after")
     def validate_hierarchy(self) -> "BacklogBatch":

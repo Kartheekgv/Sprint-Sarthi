@@ -17,6 +17,10 @@ SYSTEM_PROMPT = """You are Sprint Sarthi's Backlog Agent. Return JSON only and n
 Transform the supplied decomposition records into a complete SAFe Epic -> Feature -> Story -> Task hierarchy. Use every decomposition ID at least once and only use supplied IDs. Anchor each Epic to an architecture layer or S-AD section. Keep each story independently valuable and each task concrete. Include evidence-supported functional, QA, enabler, infrastructure, security, compliance, and release work so the hierarchy reaches a shippable service. Every story and task needs an objective Definition of Done; every task also needs testable acceptance criteria. Do not add priority, estimates, dependencies, assignments, or sprint placement because later specialist agents own those fields. Temporary E/F/S/T keys only establish parent relationships; the server assigns stable IDs."""
 
 DECOMPOSITIONS_PER_BATCH = 4
+MAX_EPICS = 100
+MAX_FEATURES = 300
+MAX_STORIES = 300
+MAX_TASKS = 1000
 
 
 @dataclass(frozen=True)
@@ -171,10 +175,10 @@ async def generate_backlog(
     processed_decompositions = 0
     for batch_index, batch_context in enumerate(context_batches):
         processed_decompositions += len(batch_context)
-        epic_quota = 30 * processed_decompositions // len(context) - allocated_epics
-        feature_quota = 100 * processed_decompositions // len(context) - allocated_features
-        story_quota = 100 * processed_decompositions // len(context) - allocated_stories
-        task_quota = 300 * processed_decompositions // len(context) - allocated_tasks
+        epic_quota = MAX_EPICS * processed_decompositions // len(context) - allocated_epics
+        feature_quota = MAX_FEATURES * processed_decompositions // len(context) - allocated_features
+        story_quota = MAX_STORIES * processed_decompositions // len(context) - allocated_stories
+        task_quota = MAX_TASKS * processed_decompositions // len(context) - allocated_tasks
         minimum_stories = len(batch_context)
         allocated_epics += epic_quota
         allocated_features += feature_quota

@@ -4,7 +4,11 @@ $ProjectRoot = $PSScriptRoot
 $Backend = Join-Path $ProjectRoot "backend"
 $Frontend = Join-Path $ProjectRoot "frontend"
 
-if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
+if (Get-Command py -ErrorAction SilentlyContinue) {
+    $PythonLauncher = "py"
+} elseif (Get-Command python -ErrorAction SilentlyContinue) {
+    $PythonLauncher = "python"
+} else {
     throw "Python is required. Install Python 3.11 or newer, then run this script again."
 }
 
@@ -14,7 +18,12 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 
 Write-Host "Creating the Python virtual environment..."
 if (-not (Test-Path (Join-Path $Backend ".venv\Scripts\python.exe"))) {
-    py -3 -m venv (Join-Path $Backend ".venv")
+    if ($PythonLauncher -eq "py") {
+        & $PythonLauncher -3 -m venv (Join-Path $Backend ".venv")
+    } else {
+        & $PythonLauncher -m venv (Join-Path $Backend ".venv")
+    }
+    if ($LASTEXITCODE -ne 0) { throw "Python virtual environment creation failed." }
 }
 
 $Python = Join-Path $Backend ".venv\Scripts\python.exe"

@@ -1,10 +1,14 @@
 # Sprint Sarthi
 
-Sprint Sarthi runs locally on Windows with Python and Node.js. Docker, Docker Desktop, AWS, WSL, and administrator permissions are not required.
+Sprint Sarthi runs locally with Python and Node.js on Windows, macOS, and Linux. Docker, Docker Desktop, AWS, WSL, and administrator permissions are not required.
 
-## Windows Setup
+## Local Setup
 
-### 1. Install prerequisites
+The project supports Windows, macOS, and Linux. Python 3.11 or newer and Node.js 20 or newer are required.
+
+### Windows
+
+#### 1. Install prerequisites
 
 Install these manually before starting:
 
@@ -24,7 +28,7 @@ npx --version
 
 Python 3.11 or newer and Node.js 20 or newer are required.
 
-### 2. Download the project
+#### 2. Download the project
 
 Open PowerShell:
 
@@ -40,7 +44,7 @@ cd path\to\Sprint-Sarthi
 git pull origin main
 ```
 
-### 3. Install the project
+#### 3. Install the project
 
 Run from the project folder:
 
@@ -50,7 +54,7 @@ powershell -ExecutionPolicy Bypass -File .\setup-local.ps1
 
 This creates `backend\.venv`, installs Python and frontend dependencies, creates `backend\.env`, and runs database migrations. It does not install global packages or modify AWS.
 
-### 4. Configure optional AI access
+#### 4. Configure optional AI access
 
 Open the local environment file:
 
@@ -62,7 +66,7 @@ Add your LLMAAS credentials if AI features are needed. Do not commit or share th
 
 The application can start without AI credentials, but AI workflow features will require valid values in `backend\.env`.
 
-### 5. Start the backend
+#### 5. Start the backend
 
 Open PowerShell window 1:
 
@@ -73,7 +77,7 @@ powershell -ExecutionPolicy Bypass -File .\start-backend.ps1
 
 Leave this window running. The backend listens on `http://127.0.0.1:8000`.
 
-### 6. Start the frontend
+#### 6. Start the frontend
 
 Open PowerShell window 2:
 
@@ -84,7 +88,7 @@ powershell -ExecutionPolicy Bypass -File .\start-frontend.ps1
 
 Leave this window running. The frontend listens on `http://localhost:3000`.
 
-### 7. Open the application
+#### 7. Open the application
 
 - UI: http://localhost:3000
 - Health check: http://localhost:3000/health
@@ -100,6 +104,23 @@ Password: password
 ```
 
 Keep both PowerShell windows running while using the application. Press `Ctrl+C` in each window to stop it.
+
+### macOS and Linux
+
+From the project folder, run:
+
+```sh
+sh ./setup-local.sh
+```
+
+Start the services in separate terminals:
+
+```sh
+sh ./start-backend.sh
+sh ./start-frontend.sh
+```
+
+Then open `http://localhost:3000`. The backend listens on `http://127.0.0.1:8000`.
 
 ### Verify the running application
 

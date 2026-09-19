@@ -77,6 +77,7 @@ from app.workflows.sprint_planning import SprintPlanningState, checkpoint_sprint
 from app.workflows.quality import ValidationState, checkpoint_validation_stage
 from app.workflows.decomposition import DecompositionState, checkpoint_decomposition_stage
 from app.workflows.requirements import RequirementState, checkpoint_requirement_stage
+from app.workflows.approval import ApprovalState, resume_approval_graph, start_approval_graph
 
 
 router = APIRouter()
@@ -1085,15 +1086,28 @@ async def generate_session_backlog(
             }),
         ))
         await db.commit()
-        await checkpoint_backlog_stage(BacklogState(
-            project_id=session.project_id,
-            session_id=session.id,
-            thread_id=session.thread_id,
-            epic_ids=[item.id for item in epics],
-            story_ids=[item.id for item in stories],
-            task_ids=[item.id for item in tasks],
-            status="backlog_complete",
-        ), settings.checkpoint_database_path)
+        try:
+            await checkpoint_backlog_stage(BacklogState(
+                project_id=session.project_id,
+                session_id=session.id,
+                thread_id=session.thread_id,
+                epic_ids=[item.id for item in epics],
+                story_ids=[item.id for item in stories],
+                task_ids=[item.id for item in tasks],
+                status="backlog_complete",
+            ), settings.checkpoint_database_path)
+        except Exception as error:
+            db.add(AuditEvent(
+                project_id=session.project_id,
+                action="workflow.checkpoint_failed",
+                entity_type="analysis_session",
+                entity_id=session.id,
+                details_json=json.dumps({
+                    "node": "Backlog",
+                    "error": type(error).__name__,
+                }),
+            ))
+            await db.commit()
         epic_rows, feature_rows, story_rows, task_rows = backlog_to_dicts(epics, features, stories, tasks)
         return BacklogGenerationResult(
             session_id=session.id, session_status=session.status,
@@ -1575,10 +1589,20 @@ async def assign_session_backlog(
             details_json=json.dumps({"count": len(assignments), "status": "proposed"}),
         ))
         await db.commit()
-        await checkpoint_assignment_stage(AssignmentState(
-            project_id=session.project_id, session_id=session.id, thread_id=session.thread_id,
-            assignment_ids=[item.id for item in assignments], status="assignment_complete",
-        ), settings.checkpoint_database_path)
+        try:
+            await checkpoint_assignment_stage(AssignmentState(
+                project_id=session.project_id, session_id=session.id, thread_id=session.thread_id,
+                assignment_ids=[item.id for item in assignments], status="assignment_complete",
+            ), settings.checkpoint_database_path)
+        except Exception as error:
+            db.add(AuditEvent(
+                project_id=session.project_id,
+                action="workflow.checkpoint_failed",
+                entity_type="analysis_session",
+                entity_id=session.id,
+                details_json=json.dumps({"node": "Assignment", "error": type(error).__name__}),
+            ))
+            await db.commit()
         rows = await assignments_to_dicts(db, assignments)
         return AssignmentGenerationResult(
             session_id=session.id, session_status=session.status,
@@ -2010,6 +2034,16 @@ async def answer_quality_clarification(
         apply_quality_clarification(item, clarification.item_type, json.loads(clarification.missing_fields_json), payload.values)
     except ValueError as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    provenance = json.loads(item.provenance_json or "{}")
+    for field_name, value in payload.values.items():
+        provenance[field_name] = ProvenanceValue(
+            value=value,
+            origin="human_provided",
+            confidence=1.0,
+            source_references=[],
+            requires_review=False,
+        ).model_dump(mode="json")
+    item.provenance_json = json.dumps(provenance)
     clarification.answer_json = json.dumps(payload.values)
     clarification.status = "answered"
     session = await db.get(AnalysisSession, clarification.session_id)
@@ -2072,6 +2106,13 @@ async def assess_session_board_health(
     db.add(AuditEvent(project_id=session.project_id, action="board_health.assessed", entity_type="analysis_session", entity_id=session.id, details_json=json.dumps({"score": health.score, "risk_level": health.risk_level})))
     await db.commit()
     await checkpoint_validation_stage(ValidationState(project_id=session.project_id, session_id=session.id, thread_id=session.thread_id, status="awaiting_approval"), settings.checkpoint_database_path, "board_health")
+    await start_approval_graph(ApprovalState(
+        project_id=session.project_id,
+        session_id=session.id,
+        thread_id=session.thread_id,
+        status="awaiting_approval",
+        decision=None,
+    ), settings.checkpoint_database_path)
     return BoardHealthGenerationResult(session_id=session.id, session_status=session.status, health=BoardHealthRead.model_validate(board_health_to_dict(health)))
 
 
@@ -2080,12 +2121,21 @@ async def decide_session_approval(
     session_id: str,
     payload: ApprovalDecisionCreate,
     db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> ApprovalDecisionRead:
     session = await db.get(AnalysisSession, session_id)
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
     if session.status != "awaiting_approval":
         raise HTTPException(status.HTTP_409_CONFLICT, "Complete board health assessment before human approval")
+    try:
+        decision = await resume_approval_graph(
+            session.thread_id, payload.decision, settings.checkpoint_database_path
+        )
+    except Exception as error:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Approval workflow is not awaiting this decision") from error
+    if decision != payload.decision:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Approval workflow returned an unexpected decision")
     approval = Approval(
         project_id=session.project_id, session_id=session.id, action="publish_backlog",
         approved_by=payload.approved_by.strip(), decision=payload.decision, note=payload.note.strip(),

@@ -33,7 +33,7 @@ class AssignmentDraft(BaseModel):
 
 class AssignmentBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    assignments: list[AssignmentDraft] = Field(min_length=1, max_length=400)
+    assignments: list[AssignmentDraft] = Field(min_length=1, max_length=1200)
 
 
 class AssignmentRead(BaseModel):

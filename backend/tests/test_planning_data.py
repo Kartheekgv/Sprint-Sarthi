@@ -6,7 +6,7 @@ from openpyxl import Workbook
 import pytest
 
 from app.schemas.planning_data import AssignmentBatch
-from app.services.assignment import _rebalance_for_capacity
+from app.services.assignment import _deterministic_assignment, _rebalance_for_capacity
 from app.services.planning_data import build_planning_template, parse_planning_workbook
 from app.services.quality import calculate_board_health_score
 
@@ -104,6 +104,29 @@ def test_assignment_rebalances_overloaded_member_with_verified_capacity():
     assert assignments["TASK-001"].team_member_id == "MEM-1"
     assert assignments["TASK-002"].team_member_id == "MEM-2"
     assert "Capacity-adjusted" in assignments["TASK-002"].reason
+
+
+def test_assignment_fallback_creates_a_reviewable_recommendation():
+    task = SimpleNamespace(
+        title="Build API", description="Python FastAPI service", task_type="backend",
+        estimated_hours=12,
+    )
+    members = {
+        "MEM-1": SimpleNamespace(
+            name="Asha", skills_json=json.dumps(["Python", "FastAPI"]),
+        ),
+    }
+
+    result = _deterministic_assignment(
+        "TASK-001", {"TASK-001": task}, members,
+        {"MEM-1": 40}, {},
+    )
+
+    assert result["item_stable_id"] == "TASK-001"
+    assert result["team_member_id"] == "MEM-1"
+    assert result["recommended_hours"] == 12
+    assert result["confidence"] < 1
+    assert "Human review required" in result["reason"]
 
 
 @pytest.mark.asyncio

@@ -11,14 +11,15 @@ from app.models.entities import (
 )
 from app.providers.base import LLMProvider
 from app.services.prompting import compact_json
-from app.schemas.planning_data import AssignmentBatch
+from app.services.capacity import capacity_by_member
+from app.schemas.planning_data import AssignmentBatch, AssignmentDraft
 from app.schemas.provenance import ProvenanceValue
 
 
 SYSTEM_PROMPT = """You are Sprint Sarthi's Assignment Agent. Return JSON only and never markdown.
-Recommend exactly one team member for every supplied story and task. Use only supplied member IDs. Match required work to demonstrated roles and skills, then respect available capacity, allocation, leave, and holidays. Story assignments indicate ownership and must use null recommended_hours. Task recommended_hours must equal the supplied estimate. Do not schedule sprints or approve assignments. Every recommendation requires human review."""
+Recommend exactly one team member for every supplied story and task. Use only supplied member IDs. Match required work to demonstrated roles and skills. Use the supplied verified capacity snapshots as facts; never calculate capacity, working days, leave days, holidays, allocation, or utilization. Story assignments indicate ownership and must use null recommended_hours. Task recommended_hours must equal the supplied estimate. Do not schedule sprints or approve assignments. Every recommendation requires human review."""
 
-STORIES_PER_BATCH = 10
+STORIES_PER_BATCH = 5
 
 
 @dataclass(frozen=True)
@@ -27,11 +28,52 @@ class AssignmentGeneration:
     prompt_hash: str
 
 
+def _deterministic_assignment(
+    item_id: str,
+    task_by_id: dict[str, Task],
+    member_by_external: dict[str, TeamMember],
+    capacity_by_external: dict[str, float],
+    loads: dict[str, float],
+) -> object:
+    task = task_by_id.get(item_id)
+    hours = float(task.estimated_hours or 0) if task else 0.0
+    task_text = "" if task is None else f"{task.title} {task.description} {task.task_type}".lower()
+    candidates = []
+    for member_id, member in member_by_external.items():
+        remaining = capacity_by_external.get(member_id, 0.0) - loads.get(member_id, 0.0)
+        if task and remaining < hours:
+            continue
+        skills = [str(skill) for skill in json.loads(member.skills_json)]
+        matches = sum(skill.lower() in task_text for skill in skills)
+        candidates.append((matches, remaining, member_id, member))
+    if not candidates:
+        raise ValueError(f"Verified team capacity is insufficient for {item_id}")
+    _, remaining, member_id, _ = max(candidates, key=lambda item: (item[0], item[1], item[2]))
+    if task:
+        loads[member_id] = loads.get(member_id, 0.0) + hours
+    return {
+        "item_stable_id": item_id,
+        "team_member_id": member_id,
+        "recommended_hours": task.estimated_hours if task else None,
+        "match_score": 0.5 if task else 0.6,
+        "reason": (
+            f"Deterministic recommendation using verified capacity; {remaining:g} hours remain. "
+            "Human review required."
+        ),
+        "confidence": 0.5,
+    }
+
+
 def _rebalance_for_capacity(
     batch: AssignmentBatch,
     task_by_id: dict[str, Task],
     member_by_external: dict[str, TeamMember],
+    capacity_by_external: dict[str, float] | None = None,
 ) -> AssignmentBatch | None:
+    capacity_by_external = capacity_by_external or {
+        member_id: float(member.capacity_hours or 0)
+        for member_id, member in member_by_external.items()
+    }
     loads = {member_id: 0.0 for member_id in member_by_external}
     replacements: dict[str, object] = {}
     task_assignments = sorted(
@@ -45,12 +87,12 @@ def _rebalance_for_capacity(
         candidates = []
         task_text = f"{task.title} {task.description} {task.task_type}".lower()
         for member_id, member in member_by_external.items():
-            capacity = member.capacity_hours
-            if capacity is not None and loads[member_id] + hours > capacity:
+            capacity = capacity_by_external.get(member_id, 0.0)
+            if loads[member_id] + hours > capacity:
                 continue
             skills = [str(skill) for skill in json.loads(member.skills_json)]
             matched_skills = [skill for skill in skills if skill.lower() in task_text]
-            remaining = float("inf") if capacity is None else capacity - loads[member_id]
+            remaining = capacity - loads[member_id]
             candidates.append((len(matched_skills), member_id == item.team_member_id, remaining, member_id, member, matched_skills))
         if not candidates:
             return None
@@ -69,7 +111,7 @@ def _rebalance_for_capacity(
     ])
 
 
-async def generate_assignments(
+async def _generate_assignments(
     db: AsyncSession,
     project_id: str,
     session_id: str,
@@ -86,6 +128,7 @@ async def generate_assignments(
         raise ValueError("Stories, tasks, and verified team members are required for assignment")
     department_by_id = {item.id: item.name for item in departments}
     member_external_by_id = {item.id: item.external_id or item.id for item in members}
+    verified_capacity, capacity_snapshots = capacity_by_member(members, sprints, holidays, leaves)
     story_context = [{
             "stable_id": item.stable_id, "title": item.title, "description": item.description,
             "story_points": item.story_points, "priority": item.priority,
@@ -100,7 +143,7 @@ async def generate_assignments(
         "team_members": [{
             "team_member_id": item.external_id or item.id, "name": item.name, "role": item.role,
             "department": department_by_id.get(item.department_id, ""), "skills": json.loads(item.skills_json),
-            "capacity_hours": item.capacity_hours, "allocation_percent": item.allocation_percent,
+            "verified_capacity_hours": verified_capacity.get(item.external_id or item.id, 0.0),
             "location": item.location,
         } for item in members],
         "sprints": [{"name": item.name, "start_date": str(item.start_date), "end_date": str(item.end_date)} for item in sprints],
@@ -109,6 +152,7 @@ async def generate_assignments(
             "team_member_id": member_external_by_id[item.team_member_id],
             "start_date": str(item.start_date), "end_date": str(item.end_date), "reason": item.reason,
         } for item in leaves],
+        "capacity_snapshots": [item.model_dump(mode="json") for item in capacity_snapshots],
     }
     shape = {"assignments": [{
         "item_stable_id": "TASK-001", "team_member_id": "MEM-001",
@@ -132,8 +176,14 @@ async def generate_assignments(
         local_ids = story_ids | {item["stable_id"] for item in context["tasks"]}
         validation_error = ""
         final_error = "unknown assignment mismatch"
+        recovered: dict[str, AssignmentDraft] = {}
+        batch_completed = False
         for _ in range(3):
-            raw = await provider.generate_text(prompt + validation_error, SYSTEM_PROMPT)
+            try:
+                raw = await provider.generate_text(prompt + validation_error, SYSTEM_PROMPT)
+            except Exception as error:
+                final_error = str(error)
+                break
             try:
                 batch = AssignmentBatch.model_validate_json(raw)
             except ValidationError as error:
@@ -156,11 +206,37 @@ async def generate_assignments(
                     issues.append(f"{item.item_stable_id} must use null hours")
             if not issues:
                 merged_assignments.extend(batch.assignments)
+                batch_completed = True
                 break
             final_error = "; ".join(issues)
             validation_error = "\nCorrect every validation error and return the full batch:\n" + final_error
-        else:
-            raise ValueError(f"LLM assignment batch {index // STORIES_PER_BATCH + 1} failed validation: {final_error}")
+            for item in batch.assignments:
+                if item.item_stable_id not in local_ids or item.item_stable_id in recovered:
+                    continue
+                if item.team_member_id not in member_by_external:
+                    continue
+                if item.item_stable_id in task_by_id:
+                    if item.recommended_hours != task_by_id[item.item_stable_id].estimated_hours:
+                        continue
+                elif item.recommended_hours is not None:
+                    continue
+                recovered[item.item_stable_id] = item
+        if not batch_completed:
+            fallback_loads: dict[str, float] = {}
+            for item in recovered.values():
+                if item.item_stable_id in task_by_id:
+                    fallback_loads[item.team_member_id] = fallback_loads.get(item.team_member_id, 0.0) + (
+                        item.recommended_hours or 0
+                    )
+            for missing_id in sorted(local_ids - recovered.keys()):
+                recovered[missing_id] = AssignmentDraft.model_validate(_deterministic_assignment(
+                    missing_id,
+                    task_by_id,
+                    member_by_external,
+                    verified_capacity,
+                    fallback_loads,
+                ))
+            merged_assignments.extend(recovered.values())
     merged = AssignmentBatch(assignments=merged_assignments)
     if {item.item_stable_id for item in merged.assignments} != expected_ids:
         raise ValueError("Merged assignment output does not cover the complete backlog")
@@ -168,16 +244,31 @@ async def generate_assignments(
     for item in merged.assignments:
         if item.item_stable_id in task_by_id:
             loads[item.team_member_id] = loads.get(item.team_member_id, 0) + (item.recommended_hours or 0)
-    overloaded = any(
-        member_by_external[member_id].capacity_hours is not None
-        and hours > member_by_external[member_id].capacity_hours
-        for member_id, hours in loads.items()
-    )
+    overloaded = any(hours > verified_capacity.get(member_id, 0.0) for member_id, hours in loads.items())
     if overloaded:
-        merged = _rebalance_for_capacity(merged, task_by_id, member_by_external)
+        merged = _rebalance_for_capacity(merged, task_by_id, member_by_external, verified_capacity)
         if merged is None:
             raise ValueError("Verified team capacity is insufficient for the estimated task hours")
     return AssignmentGeneration(merged, hashlib.sha256("\n".join(prompts).encode("utf-8")).hexdigest())
+
+
+class _DeterministicAssignmentProvider:
+    async def generate_text(self, _prompt: str, _system_prompt: str | None = None) -> str:
+        return '{"assignments": []}'
+
+
+async def generate_assignments(
+    db: AsyncSession,
+    project_id: str,
+    session_id: str,
+    provider: LLMProvider,
+) -> AssignmentGeneration:
+    try:
+        return await _generate_assignments(db, project_id, session_id, provider)
+    except Exception:
+        return await _generate_assignments(
+            db, project_id, session_id, _DeterministicAssignmentProvider()
+        )
 
 
 async def persist_assignments(

@@ -635,6 +635,41 @@ export default function Home() {
   }, [hydrated]);
 
   useEffect(() => {
+    if (!hydrated || !initialSnapshot.project?.id) return;
+    fetch(`${API_URL}/projects/${initialSnapshot.project.id}/resume`)
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not refresh the active workflow.");
+        return response.json() as Promise<WorkflowResume>;
+      })
+      .then((resumed) => {
+        setProject(resumed.project);
+        setDocuments(resumed.documents);
+        setDocument(resumed.documents.at(-1) ?? null);
+        setSession(resumed.session);
+        setClarification(resumed.clarification);
+        setClarificationsComplete(resumed.clarifications_complete);
+        setRequirements(resumed.requirements);
+        setDecompositions(resumed.decompositions);
+        setBacklog(resumed.backlog ? { ...resumed.backlog, features: resumed.backlog.features ?? [] } : null);
+        setEnriched(resumed.enriched);
+        setEstimated(resumed.estimated);
+        setDependencies(resumed.dependencies);
+        setPlanningReady(resumed.planning_ready);
+        setAssignments(resumed.assignments);
+        setSprintPlan(resumed.sprint_plan);
+        setDuplicateCandidates(resumed.duplicate_candidates);
+        setDuplicatesComplete(resumed.duplicates_complete);
+        setQualityResults(resumed.quality_results);
+        setBoardHealth(resumed.board_health);
+        setApproved(resumed.approved);
+        setPublishedExport(resumed.published_export);
+        setSelectedAgent(resumed.agent_index);
+        setSelectedStage(agentStages[resumed.agent_index]?.section ?? 0);
+      })
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not refresh the active workflow."));
+  }, [hydrated, initialSnapshot.project?.id]);
+
+  useEffect(() => {
     if (!session) {
       return;
     }

@@ -51,5 +51,5 @@ class TaskEstimate(BaseModel):
 
 class EstimationBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    stories: list[StoryEstimate] = Field(min_length=1, max_length=100)
-    tasks: list[TaskEstimate] = Field(min_length=1, max_length=300)
+    stories: list[StoryEstimate] = Field(min_length=1, max_length=300)
+    tasks: list[TaskEstimate] = Field(min_length=1, max_length=1000)

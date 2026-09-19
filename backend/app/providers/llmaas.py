@@ -92,7 +92,7 @@ class LLMAASProvider:
             base_url=self._settings.llm_base_url,
             default_headers={"X-LLM-API-CLIENT-ID": f"Bearer {self._api_client_key}"},
             timeout=self._settings.llm_timeout_seconds,
-            max_retries=1,
+            max_retries=0,
         )
 
     async def generate_text(self, prompt: str, system_prompt: str | None = None) -> str:
