@@ -36,17 +36,35 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 echo "Building and starting Sprint Sarthi..."
-SERVER_IP="${SPRINT_SARTHI_HOST:-$(curl --silent --max-time 2 http://169.254.169.254/latest/meta-data/public-ipv4 || true)}"
+if [[ -z "${SPRINT_SARTHI_HOST:-}" ]]; then
+  METADATA_TOKEN="$(curl --silent --max-time 2 -X PUT \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
+    http://169.254.169.254/latest/api/token || true)"
+  SERVER_IP="$(curl --silent --max-time 2 \
+    -H "X-aws-ec2-metadata-token: ${METADATA_TOKEN}" \
+    http://169.254.169.254/latest/meta-data/public-ipv4 || true)"
+else
+  SERVER_IP="$SPRINT_SARTHI_HOST"
+fi
 SERVER_IP="${SERVER_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 SERVER_IP="${SERVER_IP:-localhost}"
-export FRONTEND_ORIGIN="${FRONTEND_ORIGIN:-http://${SERVER_IP}:3000}"
+if [[ -z "${SPRINT_SARTHI_FRONTEND_PORT:-}" && -n "${SPRINT_SARTHI_HOST:-}" ]]; then
+  export SPRINT_SARTHI_FRONTEND_PORT=80
+fi
+FRONTEND_PORT="${SPRINT_SARTHI_FRONTEND_PORT:-3000}"
+if [[ "$FRONTEND_PORT" == "80" ]]; then
+  FRONTEND_URL="http://${SERVER_IP}"
+else
+  FRONTEND_URL="http://${SERVER_IP}:${FRONTEND_PORT}"
+fi
+export FRONTEND_ORIGIN="${FRONTEND_ORIGIN:-${FRONTEND_URL}}"
 export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://${SERVER_IP}:8000/api/v1}"
 "${DOCKER[@]}" compose up --build --detach --remove-orphans
 
 echo "Waiting for services..."
 for attempt in {1..30}; do
   if curl --fail --silent http://localhost:8000/health >/dev/null \
-    && curl --fail --silent http://localhost:3000 >/dev/null; then
+    && curl --fail --silent "http://localhost:${FRONTEND_PORT}" >/dev/null; then
     break
   fi
   if [[ "$attempt" == 30 ]]; then
@@ -60,7 +78,7 @@ done
 
 echo
 echo "Sprint Sarthi is running:"
-echo "  Frontend: http://${SERVER_IP}:3000"
+echo "  Frontend: ${FRONTEND_URL}"
 echo "  API:      http://${SERVER_IP}:8000"
 echo "  Health:   http://${SERVER_IP}:8000/health"
 echo

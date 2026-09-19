@@ -25,9 +25,10 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
-      - "3000:3000"
+      - "${SPRINT_SARTHI_FRONTEND_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:3000"]
       interval: 10s
