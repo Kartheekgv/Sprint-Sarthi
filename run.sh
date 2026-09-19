@@ -48,10 +48,12 @@ else
 fi
 SERVER_IP="${SERVER_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 SERVER_IP="${SERVER_IP:-localhost}"
-if [[ -n "${SPRINT_SARTHI_HOST:-}" ]]; then
-  export SPRINT_SARTHI_FRONTEND_PORT=80
-elif [[ -z "${SPRINT_SARTHI_FRONTEND_PORT:-}" ]]; then
-  export SPRINT_SARTHI_FRONTEND_PORT=3000
+if [[ -z "${SPRINT_SARTHI_FRONTEND_PORT:-}" ]]; then
+  if [[ -n "${SPRINT_SARTHI_HOST:-}" ]]; then
+    export SPRINT_SARTHI_FRONTEND_PORT=80
+  else
+    export SPRINT_SARTHI_FRONTEND_PORT=3000
+  fi
 fi
 FRONTEND_PORT="${SPRINT_SARTHI_FRONTEND_PORT:-3000}"
 if [[ "$FRONTEND_PORT" == "80" ]]; then
