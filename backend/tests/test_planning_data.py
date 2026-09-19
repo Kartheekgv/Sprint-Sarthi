@@ -6,7 +6,7 @@ from openpyxl import Workbook
 import pytest
 
 from app.schemas.planning_data import AssignmentBatch
-from app.services.assignment import _rebalance_for_capacity
+from app.services.assignment import _deterministic_assignments, _rebalance_for_capacity
 from app.services.planning_data import build_planning_template, parse_planning_workbook
 from app.services.quality import calculate_board_health_score
 
@@ -104,6 +104,38 @@ def test_assignment_rebalances_overloaded_member_with_verified_capacity():
     assert assignments["TASK-001"].team_member_id == "MEM-1"
     assert assignments["TASK-002"].team_member_id == "MEM-2"
     assert "Capacity-adjusted" in assignments["TASK-002"].reason
+
+
+def test_deterministic_assignment_covers_stories_and_tasks_with_capacity():
+    stories = [SimpleNamespace(
+        id="story-1", stable_id="STORY-001", title="Build service",
+        description="Python API", user_story="As a user I need an API",
+    )]
+    tasks = [
+        SimpleNamespace(id="task-1", stable_id="TASK-001", story_id="story-1", title="Build API", description="Python FastAPI", task_type="implementation", work_category="functional", estimated_hours=30),
+        SimpleNamespace(id="task-2", stable_id="TASK-002", story_id="story-1", title="Test API", description="API Testing", task_type="testing", work_category="qa", estimated_hours=20),
+    ]
+    members = {
+        "MEM-1": SimpleNamespace(name="Asha", role="Backend Engineer", skills_json=json.dumps(["Python", "FastAPI"]), capacity_hours=30),
+        "MEM-2": SimpleNamespace(name="Mira", role="QA Engineer", skills_json=json.dumps(["API Testing"]), capacity_hours=20),
+    }
+
+    result = _deterministic_assignments(stories, tasks, members)
+
+    assert result is not None
+    assignments = {item.item_stable_id: item for item in result.assignments}
+    assert set(assignments) == {"STORY-001", "TASK-001", "TASK-002"}
+    assert assignments["TASK-001"].team_member_id == "MEM-1"
+    assert assignments["TASK-002"].team_member_id == "MEM-2"
+    assert assignments["STORY-001"].recommended_hours is None
+
+
+def test_deterministic_assignment_rejects_insufficient_capacity():
+    stories = [SimpleNamespace(id="story-1", stable_id="STORY-001", title="Build service", description="API", user_story="Need API")]
+    tasks = [SimpleNamespace(id="task-1", stable_id="TASK-001", story_id="story-1", title="Build API", description="Python", task_type="implementation", work_category="functional", estimated_hours=30)]
+    members = {"MEM-1": SimpleNamespace(name="Asha", role="Engineer", skills_json=json.dumps(["Python"]), capacity_hours=20)}
+
+    assert _deterministic_assignments(stories, tasks, members) is None
 
 
 @pytest.mark.asyncio

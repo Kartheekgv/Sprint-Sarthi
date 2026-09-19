@@ -27,6 +27,77 @@ class AssignmentGeneration:
     prompt_hash: str
 
 
+def _deterministic_assignments(
+    stories: list[UserStory],
+    tasks: list[Task],
+    member_by_external: dict[str, TeamMember],
+) -> AssignmentBatch | None:
+    loads = {member_id: 0.0 for member_id in member_by_external}
+    task_owner: dict[str, str] = {}
+    task_assignments = []
+    tasks_by_story: dict[str, list[Task]] = {story.id: [] for story in stories}
+    for task in tasks:
+        tasks_by_story.setdefault(task.story_id, []).append(task)
+
+    for task in sorted(tasks, key=lambda item: float(item.estimated_hours or 0), reverse=True):
+        hours = float(task.estimated_hours or 0)
+        task_text = f"{task.title} {task.description} {task.task_type} {task.work_category}".lower()
+        candidates = []
+        for member_id, member in member_by_external.items():
+            capacity = float(member.capacity_hours or 0)
+            if loads[member_id] + hours > capacity:
+                continue
+            skills = [str(skill) for skill in json.loads(member.skills_json)]
+            matched_skills = [skill for skill in skills if skill.lower() in task_text]
+            role_match = any(token in task_text for token in member.role.lower().split() if len(token) > 2)
+            candidates.append((
+                len(matched_skills), role_match, capacity - loads[member_id],
+                member_id, member, matched_skills,
+            ))
+        if not candidates:
+            return None
+        _, role_match, remaining, member_id, member, matched_skills = max(
+            candidates, key=lambda candidate: candidate[:3]
+        )
+        loads[member_id] += hours
+        task_owner[task.stable_id] = member_id
+        basis = ", ".join(matched_skills) if matched_skills else (
+            f"{member.role} role" if role_match else f"{remaining:g} verified available hours"
+        )
+        task_assignments.append({
+            "item_stable_id": task.stable_id, "team_member_id": member_id,
+            "recommended_hours": hours, "match_score": 0.85 if matched_skills else 0.65,
+            "reason": f"Deterministic capacity-safe recommendation for {member.name} based on {basis}; human review required.",
+            "confidence": 0.85 if matched_skills else 0.7,
+        })
+
+    story_assignments = []
+    for story in stories:
+        owner_hours: dict[str, float] = {}
+        for task in tasks_by_story.get(story.id, []):
+            member_id = task_owner[task.stable_id]
+            owner_hours[member_id] = owner_hours.get(member_id, 0) + float(task.estimated_hours or 0)
+        if owner_hours:
+            member_id = max(owner_hours, key=lambda candidate: (owner_hours[candidate], candidate))
+            reason = "Assigned to the primary owner of this Story's child Tasks; human review required."
+        else:
+            story_text = f"{story.title} {story.description} {story.user_story}".lower()
+            member_id = max(
+                member_by_external,
+                key=lambda candidate: (
+                    sum(skill.lower() in story_text for skill in json.loads(member_by_external[candidate].skills_json)),
+                    float(member_by_external[candidate].capacity_hours or 0) - loads[candidate],
+                ),
+            )
+            reason = "Assigned from verified skills and remaining capacity; human review required."
+        story_assignments.append({
+            "item_stable_id": story.stable_id, "team_member_id": member_id,
+            "recommended_hours": None, "match_score": 0.75, "reason": reason,
+            "confidence": 0.75,
+        })
+    return AssignmentBatch.model_validate({"assignments": [*story_assignments, *task_assignments]})
+
+
 def _rebalance_for_capacity(
     batch: AssignmentBatch,
     task_by_id: dict[str, Task],
@@ -160,7 +231,12 @@ async def generate_assignments(
             final_error = "; ".join(issues)
             validation_error = "\nCorrect every validation error and return the full batch:\n" + final_error
         else:
-            raise ValueError(f"LLM assignment batch {index // STORIES_PER_BATCH + 1} failed validation: {final_error}")
+            fallback = _deterministic_assignments(stories, tasks, member_by_external)
+            if fallback is None:
+                raise ValueError("Verified team capacity is insufficient for the estimated task hours")
+            return AssignmentGeneration(
+                fallback, hashlib.sha256("\n".join(prompts).encode("utf-8")).hexdigest(),
+            )
     merged = AssignmentBatch(assignments=merged_assignments)
     if {item.item_stable_id for item in merged.assignments} != expected_ids:
         raise ValueError("Merged assignment output does not cover the complete backlog")
