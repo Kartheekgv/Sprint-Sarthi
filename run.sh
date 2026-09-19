@@ -36,10 +36,27 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 echo "Building and starting Sprint Sarthi..."
+SERVER_IP="${SPRINT_SARTHI_HOST:-$(curl --silent --max-time 2 http://169.254.169.254/latest/meta-data/public-ipv4 || true)}"
+SERVER_IP="${SERVER_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+SERVER_IP="${SERVER_IP:-localhost}"
+export FRONTEND_ORIGIN="${FRONTEND_ORIGIN:-http://${SERVER_IP}:3000}"
+export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://${SERVER_IP}:8000/api/v1}"
 "${DOCKER[@]}" compose up --build --detach --remove-orphans
 
-SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-SERVER_IP="${SERVER_IP:-localhost}"
+echo "Waiting for services..."
+for attempt in {1..30}; do
+  if curl --fail --silent http://localhost:8000/health >/dev/null \
+    && curl --fail --silent http://localhost:3000 >/dev/null; then
+    break
+  fi
+  if [[ "$attempt" == 30 ]]; then
+    echo "Services did not become ready. Recent logs:" >&2
+    "${DOCKER[@]}" compose ps >&2
+    "${DOCKER[@]}" compose logs --tail=80 >&2
+    exit 1
+  fi
+  sleep 2
+done
 
 echo
 echo "Sprint Sarthi is running:"

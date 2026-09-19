@@ -21,6 +21,12 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 
 Open http://localhost:3000. API health: http://localhost:8000/health.
 
+On EC2, allow inbound TCP ports `3000` and `8000` in the instance security group. If the server has multiple network addresses, set the public address before starting:
+
+```bash
+SPRINT_SARTHI_HOST=YOUR_EC2_PUBLIC_IP bash run.sh
+```
+
 Stop the containers with:
 
 ```bash
