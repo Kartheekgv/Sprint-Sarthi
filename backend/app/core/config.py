@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     llmaas_client_secret: SecretStr | None = Field(default=None, repr=False)
     llmaas_token_url: str = "https://idp.cloud.vwgroup.com/auth/realms/kums-mfa/protocol/openid-connect/token"
     checkpoint_database_path: Path = Path("data/langgraph_checkpoints.sqlite")
-    max_llm_context_chars: int = Field(default=24000, ge=1000, le=100000)
+    max_llm_context_chars: int = Field(default=24000, ge=1000, le=240000)
     embedding_provider: str = "local"
 
     def ensure_directories(self) -> None:
