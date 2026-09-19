@@ -408,6 +408,12 @@ async def process_document(
         job.error = str(error)
         await db.commit()
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    except Exception as error:
+        document.status = "failed"
+        job.status = "failed"
+        job.error = "Document processing failed"
+        await db.commit()
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, job.error) from error
 
 
 @router.get("/documents/{document_id}/chunks", response_model=list[DocumentChunkRead])
@@ -792,6 +798,16 @@ async def answer_clarification(
     session = await db.get(AnalysisSession, clarification.session_id)
     if session is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Analysis session not found")
+    if session.status != "awaiting_clarification":
+        raise HTTPException(status.HTTP_409_CONFLICT, "This session is not waiting for clarification")
+    pending = await db.scalar(
+        select(Clarification)
+        .where(Clarification.session_id == session.id, Clarification.status == "pending")
+        .order_by(Clarification.created_at, Clarification.id)
+        .limit(1)
+    )
+    if pending is None or pending.id != clarification.id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Answer the active clarification before proceeding")
     selected_label = next((option.label for option in options if option.id == option_id), None)
     answer_value = custom_answer or selected_label or payload.action
     db.add(ClarificationAnswer(
@@ -1649,7 +1665,6 @@ async def save_sprint_scope_review(
     reviewable_statuses = {
         "assignment_complete", "sprint_planning_complete", "duplicates_complete",
         "quality_clarification_required", "quality_complete", "awaiting_approval",
-        "approved", "published",
     }
     if session.status not in reviewable_statuses:
         raise HTTPException(status.HTTP_409_CONFLICT, "Complete assignments before reviewing Sprint scope")
@@ -1857,6 +1872,8 @@ async def check_new_story_before_creation(
     session = await db.get(AnalysisSession, session_id)
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis session not found")
+    if session.status in {"awaiting_approval", "approved", "published"}:
+        raise HTTPException(status.HTTP_409_CONFLICT, "New stories cannot be added after review has started")
     try:
         result = await assess_new_story(db, session.project_id, session.id, payload, provider)
     except LLMAASError as error:
@@ -1889,6 +1906,8 @@ async def create_checked_story(
     check = await db.get(NewStoryCheck, payload.check_id)
     if session is None or check is None or check.session_id != session_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "New-story check not found")
+    if session.status in {"awaiting_approval", "approved", "published"}:
+        raise HTTPException(status.HTTP_409_CONFLICT, "New stories cannot be added after review has started")
     assessment = NewStoryAssessment.model_validate_json(check.result_json)
     if check.status != "awaiting_confirmation" or assessment.classification != "new":
         raise HTTPException(status.HTTP_409_CONFLICT, "Only a genuinely new, explicitly confirmed story can be created")

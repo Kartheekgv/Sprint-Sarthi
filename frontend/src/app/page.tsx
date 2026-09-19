@@ -1587,7 +1587,20 @@ export default function Home() {
       if (decision === "approve") {
         setApproved(true);
       } else {
-        setBoardHealth(null);
+        if (project) {
+          const resumeResponse = await fetch(`${API_URL}/projects/${project.id}/resume`);
+          if (!resumeResponse.ok) throw new Error("Review was recorded, but the workflow could not be refreshed.");
+          const resumed = await resumeResponse.json() as WorkflowResume;
+          setSession(resumed.session);
+          setBoardHealth(resumed.board_health);
+          setApproved(resumed.approved);
+          setPublishedExport(resumed.published_export);
+          setPlanningIssues([]);
+          setWorkbookPreview(null);
+        } else {
+          setBoardHealth(null);
+          setApproved(false);
+        }
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unexpected error");
