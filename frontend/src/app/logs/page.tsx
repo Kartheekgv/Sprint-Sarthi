@@ -19,7 +19,7 @@ type LogEntry = {
 };
 type LogsResponse = { entries: LogEntry[]; projects: LogProject[] };
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
 
 function formatValue(key: string, value: string | number | boolean | null) {
   if (value === null || value === "") return "Not reported";

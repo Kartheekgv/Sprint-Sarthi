@@ -62,12 +62,12 @@ else
   FRONTEND_URL="http://${SERVER_IP}:${FRONTEND_PORT}"
 fi
 export FRONTEND_ORIGIN="${FRONTEND_ORIGIN:-${FRONTEND_URL}}"
-export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://${SERVER_IP}:8000/api/v1}"
+export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-/api/v1}"
 "${DOCKER[@]}" compose up --build --detach --remove-orphans
 
 echo "Waiting for services..."
 for attempt in {1..30}; do
-  if curl --fail --silent http://localhost:8000/health >/dev/null \
+  if curl --fail --silent "http://localhost:${FRONTEND_PORT}/health" >/dev/null \
     && curl --fail --silent "http://localhost:${FRONTEND_PORT}" >/dev/null; then
     break
   fi
@@ -83,8 +83,8 @@ done
 echo
 echo "Sprint Sarthi is running:"
 echo "  Frontend: ${FRONTEND_URL}"
-echo "  API:      http://${SERVER_IP}:8000"
-echo "  Health:   http://${SERVER_IP}:8000/health"
+echo "  API:      ${FRONTEND_URL}/api/v1"
+echo "  Health:   ${FRONTEND_URL}/health"
 echo
 echo "View logs: docker compose logs -f"
 echo "Stop:      docker compose down"

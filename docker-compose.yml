@@ -7,8 +7,6 @@ services:
         required: false
     environment:
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
-    ports:
-      - "8000:8000"
     volumes:
       - backend-data:/app/data
       - backend-uploads:/app/uploads
@@ -23,10 +21,12 @@ services:
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
     depends_on:
       backend:
         condition: service_healthy
+    environment:
+      BACKEND_INTERNAL_URL: http://backend:8000
     ports:
       - "${SPRINT_SARTHI_FRONTEND_PORT:-3000}:3000"
     healthcheck:

@@ -12,7 +12,7 @@ FROM dependencies AS builder
 WORKDIR /app
 COPY . .
 
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+ARG NEXT_PUBLIC_API_URL=/api/v1
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 RUN pnpm build
@@ -21,6 +21,7 @@ FROM node:22-alpine AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
+ENV BACKEND_INTERNAL_URL=http://backend:8000
 
 RUN npm install --global pnpm@10.34.5
 
