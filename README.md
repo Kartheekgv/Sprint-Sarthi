@@ -7,17 +7,19 @@ Sprint Sarthi is a human-governed AI Scrum Master that converts architecture doc
 Install Docker Desktop on Windows or macOS, or Docker Engine with the Compose plugin on Ubuntu/Linux:
 https://docs.docker.com/get-docker/
 
-From the project folder, start the API and UI together:
+On Ubuntu/Linux, run:
 
 ```bash
-docker compose up --build
+bash run.sh
 ```
 
-Open http://localhost:3000. The API is available at http://localhost:8000, and the first startup creates the local database automatically.
+Open http://localhost:3000. The API health check is http://localhost:8000/health.
 
-To configure LLMAAS, copy `backend/.env.example` to `backend/.env`, fill in the credentials, and run `docker compose up --build` again. Docker volumes preserve the database, uploads, and exports between runs.
+Stop the containers with:
 
-Stop the containers with `Ctrl+C`, or run `docker compose down` from another terminal.
+```bash
+docker compose down
+```
 
 ## Technology
 
